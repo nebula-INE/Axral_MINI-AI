@@ -1,0 +1,47 @@
+experiment_name: p1_cot20   # CoT比率20%のBaseline実験（plan §8 Day6-7）
+
+model:
+  d_model: 256
+  n_layers: 4
+  n_heads: 4
+  d_ff: 1024
+  max_seq_length: 512
+  dropout: 0.1
+  attention_dropout: 0.1
+  residual_dropout: 0.1
+
+optimizer:
+  lr: 1.0e-4
+  lr_warmup_steps: 1000
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.0e-8
+  weight_decay: 1.0e-5
+
+data:
+  train_path: data/v001.train.jsonl
+  val_path: data/v001.val.jsonl
+  tokenizer_path: data/spm_16k.model   # 未生成の場合は null にするとgeneration評価をスキップ
+  vocab_size: 16000
+  batch_size: 16
+  eval_batch_size: 16
+
+training:
+  epochs: 10
+  grad_accum_steps: 4
+  max_grad_norm: 1.0
+  label_smoothing: 0.1
+  eval_frequency: 500
+  checkpoint_frequency: 1000
+  early_stopping_patience: 5
+  resume_from_checkpoint: true
+
+kaggle:
+  max_session_time_minutes: 540
+
+wandb:
+  enabled: false        # KaggleでWANDB_API_KEYを設定したらtrueにする
+  project: vose-initial-llm
+
+results_dir: results/checkpoints
+logs_dir: logs

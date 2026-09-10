@@ -1,0 +1,27 @@
+{
+  "version": "v001",
+  "timestamp": "2026-09-10T10:57:45.629662",
+  "stages": {
+    "train_processing": {
+      "total": 18000,
+      "adopt": 6266,
+      "revise": 9919,
+      "reject": 1815,
+      "manual_review": 12611,
+      "avg_cot_score": 0.6291129629629629
+    },
+    "val_processing": {
+      "total": 2000,
+      "adopt": 720,
+      "revise": 1081,
+      "reject": 199,
+      "manual_review": 1389,
+      "avg_cot_score": 0.6301666666666667
+    },
+    "gate1": {
+      "adoption_rate": 0.3481111111111111,
+      "pass": false,
+      "message": "NG（要改善。CoTをより多段ステップに分解すること）"
+    }
+  }
+}

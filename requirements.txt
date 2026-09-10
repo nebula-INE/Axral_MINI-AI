@@ -1,0 +1,5 @@
+torch>=2.1
+sentencepiece>=0.1.99
+pyyaml>=6.0
+wandb>=0.16
+numpy>=1.24

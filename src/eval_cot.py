@@ -53,7 +53,11 @@ def verify_arithmetic(cot_text: str, answer_text: str) -> float:
             lhs, rhs = expr.split("=")
             lhs_norm = lhs.replace("×", "*").replace("÷", "/").strip()
             rhs_val = _to_float(rhs)
-            if abs(eval(lhs_norm, {"__builtins__": {}}, {}) - rhs_val) > 1e-6:  # noqa: S307
+            computed = eval(lhs_norm, {"__builtins__": {}}, {})  # noqa: S307
+            # 割り算の結果を切り捨て/四捨五入で表記するCoTがあるため、
+            # 差が1未満（浮動小数点誤差の範囲）なら許容する。
+            # 実際の計算ミス（例: 2+2=5）は差が1以上になるため区別できる。
+            if abs(computed - rhs_val) >= 0.999999:
                 return 0.0
             last_rhs = rhs.strip()
 

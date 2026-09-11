@@ -53,6 +53,20 @@ def load_tokenizer(tokenizer_path: str | None):
     """
     if not tokenizer_path:
         return None, {"pad_id": 0, "bos_id": 1, "eos_id": 2}
+
+    if not os.path.exists(tokenizer_path):
+        raise FileNotFoundError(
+            f"SentencePieceモデルが見つかりません: {tokenizer_path}\n"
+            f"先に以下を実行してトークナイザーを学習してください:\n"
+            f"  python src/train_tokenizer.py --corpus data/corpus.txt --output_dir data/ --vocab_size 16000\n"
+            f"（Kaggle上で corpus.txt が /kaggle/input/... 側にある場合はそのパスを --corpus に指定）\n"
+            f"学習後、preprocess.py も --tokenizer_path 付きで再実行してtoken_idsを実データに合わせること:\n"
+            f"  python -m src.preprocess --train_path data/v001.train.jsonl --val_path data/v001.val.jsonl "
+            f"--output_dir data/ --tokenizer_path data/spm_16k.model\n"
+            f"トークナイザーがまだ無い場合は、configs/*.yaml の data.tokenizer_path を null にすれば"
+            f"生成ベース評価（EM/F1）をスキップしてloss/PPLのみで学習を進めることもできます。"
+        )
+
     import sentencepiece as spm
 
     sp = spm.SentencePieceProcessor()

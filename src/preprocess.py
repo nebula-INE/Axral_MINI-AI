@@ -5,11 +5,19 @@ plan §3 の前処理パイプライン実装。
 手順:
   1. generate_data.py で生成した v001.train.jsonl / v001.val.jsonl を入力
   2. CoT評価スコア（§2.3）を計算し meta に追加
-  3. 簡易トークン化（文字→トークンID）を実行し token_ids / answer_token_ids を追加
-  4. v001.train.jsonl, v001.val.jsonl を上書き保存
+  3. トークン化を実行し token_ids / cot_token_ids / answer_token_ids を追加
+     - --tokenizer_path が指定されていれば SentencePiece で実トークン化
+     - 指定がなければ簡易トークン化（デモ用フォールバック）にとどめる
+  4. v001_processed.train.jsonl, v001_processed.val.jsonl を新規保存
   5. preprocessing_log.json を出力
 
-実行: python src/preprocess.py --train_path data/v001.train.jsonl --val_path data/v001.val.jsonl --output_dir data/
+実行例:
+  # SentencePieceモデルを学習済みの場合（本番）
+  python -m src.preprocess --train_path data/v001.train.jsonl --val_path data/v001.val.jsonl \
+      --output_dir data/ --tokenizer_path data/spm_16k.model
+
+  # まだトークナイザーが無い場合（CoT評価だけ先に確認したい時。簡易トークン化のまま）
+  python -m src.preprocess --train_path data/v001.train.jsonl --val_path data/v001.val.jsonl --output_dir data/
 """
 from __future__ import annotations
 
@@ -23,26 +31,33 @@ from src.eval_cot import evaluate_cot_quality
 
 def simple_tokenize(text: str) -> list[int]:
     """
-    超簡易トークン化（デモ用）。
-    本来はSentencePieceなどで真正なトークン化を行うべきだが、このスクリプト段階では
-    文字をUTF-8のバイト値に変換するだけで済ます。実際には §3.1段階8で
-    SentencePiece学習（corpus.txtから）で置き換える。
-    
-    args_model_from_path() で sp.model をロードした場合は
-    token_ids = sp.EncodeAsIds(text) に置き換える。
+    超簡易トークン化（デモ用フォールバック）。
+    文字をUTF-8のバイト値+256に変換するだけで、実際の学習には使えない
+    （vocab_sizeがモデルの設定と一致しないため）。tokenizer_pathが無い時のみ使用。
     """
     tokens = []
     for char in text:
-        # UTF-8のバイト値をトークンとする（0-255）
         for byte in char.encode("utf-8"):
-            tokens.append(byte + 256)  # オフセット（vocab_size=512想定）
+            tokens.append(byte + 256)
     return tokens
 
 
-def process_jsonl(input_path: str, output_path: str, is_train: bool = False) -> dict:
+def load_sentencepiece_tokenizer(tokenizer_path: str):
+    """SentencePieceモデルをロードする。EncodeAsIds(text) -> list[int] を返す関数を渡す。"""
+    import sentencepiece as spm
+
+    sp = spm.SentencePieceProcessor()
+    sp.Load(tokenizer_path)
+    return lambda text: sp.EncodeAsIds(text) if text else []
+
+
+def process_jsonl(input_path: str, output_path: str, tokenize_fn=None) -> dict:
     """
     JSONL ファイルを読み込み、CoT評価 + トークン化を行い、上書き保存する。
+    tokenize_fn が None の場合は simple_tokenize（デモ用）を使う。
     """
+    if tokenize_fn is None:
+        tokenize_fn = simple_tokenize
     stats = {
         "total": 0,
         "adopt": 0,
@@ -81,12 +96,12 @@ def process_jsonl(input_path: str, output_path: str, is_train: bool = False) -> 
                     stats["manual_review"] += 1
 
             # === トークン化（段階9） ===
-            item["token_ids"] = simple_tokenize(item.get("input", ""))
+            item["token_ids"] = tokenize_fn(item.get("input", ""))
             if item.get("cot"):
-                item["cot_token_ids"] = simple_tokenize(item["cot"])
+                item["cot_token_ids"] = tokenize_fn(item["cot"])
             else:
                 item["cot_token_ids"] = []
-            item["answer_token_ids"] = simple_tokenize(item.get("answer", ""))
+            item["answer_token_ids"] = tokenize_fn(item.get("answer", ""))
 
             fout.write(json.dumps(item, ensure_ascii=False) + "\n")
 
@@ -101,14 +116,27 @@ def main():
     parser.add_argument("--train_path", required=True, help="train.jsonl")
     parser.add_argument("--val_path", required=True, help="val.jsonl")
     parser.add_argument("--output_dir", default="data/", help="出力ディレクトリ")
+    parser.add_argument("--tokenizer_path", default=None,
+                        help="学習済みSentencePieceモデル（.model）。指定すると実トークン化を行う。"
+                             "未指定の場合は簡易トークン化（デモ用、本番学習には使えない）にフォールバックする。")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.tokenizer_path:
+        print(f"SentencePieceモデルをロード: {args.tokenizer_path}")
+        tokenize_fn = load_sentencepiece_tokenizer(args.tokenizer_path)
+    else:
+        print("⚠️  --tokenizer_path が未指定のため簡易トークン化（デモ用）を使用します。"
+              "本番学習前に必ず train_tokenizer.py でSentencePieceを学習し、"
+              "--tokenizer_path 付きで再実行してください。")
+        tokenize_fn = simple_tokenize
+
     log = {
         "version": "v001",
         "timestamp": datetime.now().isoformat(),
+        "tokenizer": args.tokenizer_path or "simple_tokenize (fallback)",
         "stages": {}
     }
 
@@ -120,13 +148,13 @@ def main():
 
     # === Train データ処理 ===
     print(f"段階4-9: Train データ処理中...", end="", flush=True)
-    train_stats = process_jsonl(args.train_path, train_output)
+    train_stats = process_jsonl(args.train_path, train_output, tokenize_fn)
     log["stages"]["train_processing"] = train_stats
     print(f" ✓ ({train_stats['total']}件)")
 
     # === Val データ処理 ===
     print(f"段階4-9: Val データ処理中...", end="", flush=True)
-    val_stats = process_jsonl(args.val_path, val_output)
+    val_stats = process_jsonl(args.val_path, val_output, tokenize_fn)
     log["stages"]["val_processing"] = val_stats
     print(f" ✓ ({val_stats['total']}件)")
 

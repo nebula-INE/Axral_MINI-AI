@@ -10,11 +10,15 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-FILES_TO_PACKAGE = [
+REQUIRED_FILES = [
     "v001_processed.train.jsonl",
     "v001_processed.val.jsonl",
     "corpus.txt",
     "v001_preprocessing_log.json",
+]
+OPTIONAL_FILES = [
+    "spm_16k.model",
+    "spm_16k.vocab",
 ]
 
 
@@ -24,24 +28,36 @@ def main():
     out_dir.mkdir(exist_ok=True)
 
     copied = []
-    missing = []
-    for fname in FILES_TO_PACKAGE:
+    missing_required = []
+    missing_optional = []
+
+    for fname in REQUIRED_FILES:
         src = data_dir / fname
         if src.exists():
             dst = out_dir / fname
             shutil.copy(src, dst)
-            size_mb = dst.stat().st_size / (1024 * 1024)
-            copied.append((fname, size_mb))
+            copied.append((fname, dst.stat().st_size / (1024 * 1024)))
         else:
-            missing.append(fname)
+            missing_required.append(fname)
+
+    for fname in OPTIONAL_FILES:
+        src = data_dir / fname
+        if src.exists():
+            dst = out_dir / fname
+            shutil.copy(src, dst)
+            copied.append((fname, dst.stat().st_size / (1024 * 1024)))
+        else:
+            missing_optional.append(fname)
 
     print("=== kaggle_dataset/ へのコピー結果 ===")
     for fname, size in copied:
         print(f"  ✓ {fname} ({size:.1f} MB)")
-    for fname in missing:
+    for fname in missing_required:
         print(f"  ✗ {fname} が見つかりません（先に generate_data.py / preprocess.py を実行してください）")
+    for fname in missing_optional:
+        print(f"  - {fname} は未生成（任意）。train_tokenizer.py を実行すると同梱できます。")
 
-    if not missing:
+    if not missing_required:
         print("\n次のコマンドでKaggleにアップロードできます:")
         print("  kaggle datasets create -p kaggle_dataset/          # 初回")
         print("  kaggle datasets version -p kaggle_dataset/ -m '更新内容'  # 2回目以降")

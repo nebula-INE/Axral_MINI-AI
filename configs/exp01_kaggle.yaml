@@ -1,0 +1,53 @@
+# configs/exp01.yaml のKaggle Dataset利用版。
+# /kaggle/input/<データセット名>/ 配下のファイルを直接参照する。
+# 実行前に <データセット名> を実際にAddしたデータセットのslugに書き換えること。
+
+experiment_name: p1_cot20
+
+model:
+  d_model: 256
+  n_layers: 4
+  n_heads: 4
+  d_ff: 1024
+  max_seq_length: 512
+  dropout: 0.1
+  attention_dropout: 0.1
+  residual_dropout: 0.1
+
+optimizer:
+  lr: 1.0e-4
+  lr_warmup_steps: 1000
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.0e-8
+  weight_decay: 1.0e-5
+
+data:
+  # ↓ Add Input したデータセットのslugに合わせて書き換える
+  train_path: /kaggle/input/vose-initial-llm-data-v001/v001_processed.train.jsonl
+  val_path: /kaggle/input/vose-initial-llm-data-v001/v001_processed.val.jsonl
+  tokenizer_path: /kaggle/input/vose-initial-llm-data-v001/spm_16k.model  # 未生成ならnullに
+  vocab_size: 16000
+  batch_size: 16
+  eval_batch_size: 16
+
+training:
+  epochs: 10
+  grad_accum_steps: 4
+  max_grad_norm: 1.0
+  label_smoothing: 0.1
+  eval_frequency: 500
+  checkpoint_frequency: 1000
+  early_stopping_patience: 5
+  resume_from_checkpoint: true
+
+kaggle:
+  max_session_time_minutes: 540
+
+wandb:
+  enabled: false
+  project: vose-initial-llm
+
+# /kaggle/input は読み取り専用のため、出力は /kaggle/working 配下にする
+results_dir: /kaggle/working/results/checkpoints
+logs_dir: /kaggle/working/logs

@@ -37,6 +37,17 @@ def test_eval_cot_qa_flags_manual_review():
     assert r.needs_manual_review is True
 
 
+def test_verify_arithmetic_tolerates_floor_division():
+    """回帰テスト: 2299×22÷100=505.78→505（切り捨て）を正しい計算として扱う。
+    Kaggle実データで発覚した誤検出バグ（v1では reject=1815件）の再発防止。
+    """
+    from src.eval_cot import verify_arithmetic
+
+    assert verify_arithmetic("2299 × 22 ÷ 100 = 505", "505円") == 1.0
+    # 本物の誤りは引き続き検出できること
+    assert verify_arithmetic("2+2 = 5", "5") == 0.0
+
+
 # ---------------------------------------------------------------------------
 # torch依存: torchが無い環境（このサンドボックス等）では自動的にskipされる
 # ---------------------------------------------------------------------------

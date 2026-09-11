@@ -102,15 +102,22 @@ def main():
         print(f"  ✓ dataset-metadata.json は既存のものを使用（id: {meta_id}）")
 
     if meta_id == DEFAULT_SLUG:
-        print(f"\n⚠️  id がプレースホルダのままです。アップロード前に必ず修正してください:")
-        print(f"     kaggle_dataset/dataset-metadata.json の \"id\" を")
-        print(f"     \"あなたのKaggleユーザー名/vose-initial-llm-data-v001\" に書き換える")
-        print(f"     （または次回このスクリプトを --slug ユーザー名/データセット名 付きで実行する）")
+        print(f"\n🛑 id がプレースホルダ（{DEFAULT_SLUG}）のままです。")
+        print(f"   このままアップロードすると、存在しないユーザー名の名前空間にアクセスしようとして")
+        print(f"   403 Forbidden エラーになります（実際にこのエラーで失敗した例があります）。")
+        print(f"\n   次のいずれかで修正してから再実行してください:")
+        print(f"     a) python src/package_kaggle_dataset.py --slug あなたのKaggleユーザー名/vose-initial-llm-data-v001")
+        print(f"     b) kaggle_dataset/dataset-metadata.json を直接編集し、\"id\" を書き換える")
+        print(f"\n   修正するまで kaggle datasets create/version は実行しないでください。")
+        return
 
     if not missing_required:
         print("\n次のコマンドでKaggleにアップロードできます:")
-        print("  kaggle datasets create -p kaggle_dataset/          # 初回")
-        print("  kaggle datasets version -p kaggle_dataset/ -m '更新内容'  # 2回目以降")
+        print("  kaggle datasets create -p kaggle_dataset/          # 初回（データセットがまだ存在しない場合）")
+        print("  kaggle datasets version -p kaggle_dataset/ -m '更新内容'  # 2回目以降（既に存在する場合）")
+        print("\n  ※ create と version を間違えると404/403エラーになります。")
+        print("     初回かどうか分からない場合は、Kaggleの自分のDatasetsページで")
+        print(f"     「{meta_id}」が既に存在するか確認してください。")
 
 
 if __name__ == "__main__":

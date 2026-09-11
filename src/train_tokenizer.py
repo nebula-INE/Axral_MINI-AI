@@ -73,11 +73,24 @@ def main():
     test_text = "3人で1200円を割り勘すると1人いくら？"
     ids = sp.EncodeAsIds(test_text)
     decoded = sp.DecodeIds(ids)
+
+    # SentencePieceはデフォルトでnmt_nfkc正規化を行うため、全角記号（？等）が
+    # 半角（?）に変換されるのは仕様であり不具合ではない。unicodedata.normalize("NFKC", ...)
+    # で同じ正規化をかけた上で比較する。
+    import unicodedata
+    normalized_input = unicodedata.normalize("NFKC", test_text).replace(" ", "")
+    normalized_decoded = unicodedata.normalize("NFKC", decoded).replace(" ", "")
+    is_match = normalized_decoded == normalized_input
+
     print(f"\n【動作確認】")
     print(f"  入力: {test_text}")
     print(f"  トークンID数: {len(ids)}")
     print(f"  デコード結果: {decoded}")
-    print(f"  一致: {'✓' if decoded.replace(' ', '') == test_text.replace(' ', '') else '✗ (要確認)'}")
+    if is_match:
+        print(f"  一致: ✓（NFKC正規化後で一致。全角/半角記号の変換はSentencePieceの仕様であり問題なし）")
+    else:
+        print(f"  一致: ✗ 要確認（NFKC正規化後も入力と異なる。文字化けや語彙不足の可能性）")
+
 
 
 if __name__ == "__main__":

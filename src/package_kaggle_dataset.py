@@ -50,11 +50,11 @@ def detect_kaggle_username() -> str | None:
             ["kaggle", "config", "view"],
             capture_output=True, text=True, timeout=10,
         )
-        for line in result.stdout.splitlines():
-            line = line.strip()
+        for raw_line in result.stdout.splitlines():
+            # 出力例: "- username: sekoia29"（先頭に "- " が付く）や "username: sekoia29"
+            line = raw_line.strip().lstrip("-").strip()
             if line.lower().startswith("username"):
-                # 出力例: "- username: myname" や "username: myname"
-                candidate = line.split(":", 1)[-1].strip().lstrip("-").strip()
+                candidate = line.split(":", 1)[-1].strip()
                 if candidate and candidate.upper() != "NONE":
                     return candidate
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):

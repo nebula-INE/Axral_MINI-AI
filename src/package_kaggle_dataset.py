@@ -32,7 +32,7 @@ OPTIONAL_FILES = [
     "spm_16k.vocab",
 ]
 
-DATASET_SLUG_NAME = "vose-initial-llm-data-v001"
+DATASET_SLUG_NAME = "axral-mini-ai-dataset"  # 既存のKaggle Datasetに合わせる（新規作成しない）
 DEFAULT_SLUG = f"YOUR_KAGGLE_USERNAME/{DATASET_SLUG_NAME}"
 
 

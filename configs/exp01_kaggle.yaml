@@ -1,6 +1,9 @@
 # configs/exp01.yaml のKaggle Dataset利用版。
-# /kaggle/input/<データセット名>/ 配下のファイルを直接参照する。
-# 実行前に <データセット名> を実際にAddしたデータセットのslugに書き換えること。
+# 既存データセット sekoia29/axral-mini-ai-dataset を使う想定。
+# パスは環境によって変わりうるので、実行前に必ず確認すること:
+#   - Notebook右側「Add Input」で追加した場合: /kaggle/input/axral-mini-ai-dataset/...
+#   - kagglehub.dataset_download() 等で取得した場合: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/...
+#     （ユーザーの環境ではこちらのパスだった）
 
 experiment_name: p1_cot20
 
@@ -23,10 +26,10 @@ optimizer:
   weight_decay: 1.0e-5
 
 data:
-  # ↓ Add Input したデータセットのslugに合わせて書き換える
-  train_path: /kaggle/input/vose-initial-llm-data-v001/v001_processed.train.jsonl
-  val_path: /kaggle/input/vose-initial-llm-data-v001/v001_processed.val.jsonl
-  tokenizer_path: /kaggle/input/vose-initial-llm-data-v001/spm_16k.model  # 未生成ならnullに
+  # ↓ 実際に確認したパス（/kaggle/input/datasets/sekoia29/axral-mini-ai-dataset）に合わせてある
+  train_path: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/v001_processed.train.jsonl
+  val_path: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/v001_processed.val.jsonl
+  tokenizer_path: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/spm_16k.model  # まだ無ければnullに
   vocab_size: 16000
   batch_size: 16
   eval_batch_size: 16

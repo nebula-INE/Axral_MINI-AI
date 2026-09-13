@@ -55,11 +55,44 @@ def compute_f1(preds: list[str], refs: list[str]) -> float:
 
 
 def extract_final_answer(generated_text: str) -> str:
-    """生成テキストの末尾から最終回答らしき部分を抽出する簡易ヘルパー。
+    """生成テキストの末尾から最終回答らしき部分を抽出する簡易ヘルパー（算数向け）。
     データの answer フォーマット（例: "400円"）に合わせて正規表現は調整すること。
     """
     match = re.search(r"([-\d,\.]+\s*(?:円|個|人|%)?)\s*$", generated_text.strip())
     return match.group(1).strip() if match else generated_text.strip()
+
+
+_ANSWER_MARKERS = ("答えは", "よって、", "したがって、", "よって", "したがって")
+
+
+def extract_final_segment(generated_text: str) -> str:
+    """QA/一般カテゴリ向けの解答抽出ヘルパー。
+
+    修正前は生成テキスト全体（CoTを含む長文）を正解の短い語句とそのまま
+    完全一致比較していたため、CoTが生成されている限りEMが恒常的に0になっていた。
+    「答えは」等のマーカー以降を優先的に抜き出し、無ければ最後の文（句点区切り）を使う。
+    """
+    text = generated_text.strip()
+    if not text:
+        return text
+
+    for marker in _ANSWER_MARKERS:
+        idx = text.rfind(marker)
+        if idx != -1:
+            text = text[idx + len(marker):]
+            break
+
+    parts = [p.strip() for p in re.split("[。\n]", text) if p.strip()]
+    result = parts[-1] if parts else text
+    result = result.strip("。 　")
+
+    # 「である/です/だ」等の文末表現を除去し、正解語句とEM比較しやすくする
+    for suffix in ("である", "です", "だ"):
+        if result.endswith(suffix):
+            result = result[: -len(suffix)]
+            break
+
+    return result.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +151,10 @@ def evaluate(model, val_loader, device, tokenizer=None, max_gen_tokens: int = 12
         qa_gen = [g for g, c in zip(generated_texts, categories_list) if c == "qa"]
         qa_ref = [r for r, c in zip(reference_texts, categories_list) if c == "qa"]
         if qa_gen:
-            metrics["qa_em"] = compute_em(qa_gen, qa_ref)
-            metrics["qa_f1"] = compute_f1(qa_gen, qa_ref)
+            # 修正: 生成テキスト全体ではなく、抽出した最終回答部分で比較する
+            qa_gen_extracted = [extract_final_segment(g) for g in qa_gen]
+            metrics["qa_em"] = compute_em(qa_gen_extracted, qa_ref)
+            metrics["qa_f1"] = compute_f1(qa_gen_extracted, qa_ref)
             metrics["em"] = metrics["qa_em"]
             metrics["f1"] = metrics["qa_f1"]
         else:

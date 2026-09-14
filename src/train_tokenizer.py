@@ -30,6 +30,13 @@ def main():
     parser.add_argument("--model_type", default="bpe", choices=["bpe", "unigram", "char", "word"])
     parser.add_argument("--character_coverage", type=float, default=0.9995,
                         help="日本語のような文字種が多い言語では0.9995〜0.9999推奨")
+    parser.add_argument("--split_digits", type=lambda x: x.lower() != "false", default=True,
+                        help="数字を1文字ずつ分割してトークン化するか（デフォルトTrue）。"
+                             "算数タスクでは繰り上がりを含む筆算的な処理を学習しやすくするため強く推奨。"
+                             "Falseにすると複数桁の数字が1つのBPEトークンにまとまり、"
+                             "モデルが数値の組み合わせを丸暗記するだけになり計算を学習しにくくなる"
+                             "（実データのsanity_checkで発覚: 45×4=240等、入力の数字は正しく"
+                             "コピーできても掛け算自体を間違えるケースが頻発した）。")
     args = parser.parse_args()
 
     if not os.path.exists(args.corpus):
@@ -47,6 +54,7 @@ def main():
     print(f"  コーパス: {args.corpus}")
     print(f"  vocab_size: {args.vocab_size}")
     print(f"  model_type: {args.model_type}")
+    print(f"  split_digits: {args.split_digits}")
 
     spm.SentencePieceTrainer.Train(
         input=args.corpus,
@@ -54,6 +62,7 @@ def main():
         vocab_size=args.vocab_size,
         model_type=args.model_type,
         character_coverage=args.character_coverage,
+        split_digits=args.split_digits,
         pad_id=0,
         bos_id=1,
         eos_id=2,

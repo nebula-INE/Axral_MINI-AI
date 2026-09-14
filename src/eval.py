@@ -55,11 +55,20 @@ def compute_f1(preds: list[str], refs: list[str]) -> float:
 
 
 def extract_final_answer(generated_text: str) -> str:
-    """生成テキストの末尾から最終回答らしき部分を抽出する簡易ヘルパー（算数向け）。
-    データの answer フォーマット（例: "400円"）に合わせて正規表現は調整すること。
+    """算数カテゴリ向けの解答抽出ヘルパー。
+
+    修正: 以前は末尾を正規表現 `[-\\d,\\.]+(円|個|人|%)?$` で抽出しており、
+    円/個/人/%以外の単位（km, m², m2 等）を含む答えが抽出できず、
+    正しく計算できていても「不正解」判定になるバグがあった
+    （sanity_check.py で発覚。46×47=2162等の面積問題、時速×時間の距離問題で頻発）。
+
+    学習データは `[BOS] input cot answer [EOS]` の順で連結されており、
+    cot文は必ず「。」で終わり、その直後にanswerフィールドが単位付きでそのまま
+    続く形で作られている。そのため、単位を限定した正規表現でなく
+    「最後の。区切り区間」を取る extract_final_segment() の方が頑健で、
+    QA/一般カテゴリと同じロジックに統一する。
     """
-    match = re.search(r"([-\d,\.]+\s*(?:円|個|人|%)?)\s*$", generated_text.strip())
-    return match.group(1).strip() if match else generated_text.strip()
+    return extract_final_segment(generated_text)
 
 
 _ANSWER_MARKERS = ("答えは", "よって、", "したがって、", "よって", "したがって")

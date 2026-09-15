@@ -9,6 +9,7 @@ loss/PPLのみ teacher-forcing で計算する。
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 
 import torch
@@ -21,6 +22,13 @@ import torch.nn.functional as F
 
 def _normalize_text(s: str) -> str:
     s = s.strip()
+    # NFKC正規化: 上付き文字（²→2）、全角/半角記号等の表記ゆれを吸収する。
+    # SentencePiece側もnmt_nfkc正規化を使っており学習データの「²」は
+    # トークン化の時点で「2」に変わっているため、モデルは常に「2」しか
+    # 出力できない。採点側も同じ正規化をかけないと、意味的に正しい答え
+    # （637m2 等）が表記差だけで不正解扱いになってしまう
+    # （sanity_checkで「a²+b²=c²」「637m²」等が誤判定されていたのを機に追加）。
+    s = unicodedata.normalize("NFKC", s)
     s = re.sub(r"\s+", "", s)  # 日本語は分かち書きしない前提で空白除去
     s = re.sub(r"[。、．，,\.]", "", s)
     return s

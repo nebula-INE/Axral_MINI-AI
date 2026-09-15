@@ -23,37 +23,74 @@ from src.model import TransformerLM
 from src.utils import load_config
 
 
-_CALC_EXPR_RE = re.compile(r"(\d+)\s*([×÷x*/])\s*(\d+)\s*=\s*(\d+)")
+_CALC_EXPR_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*([×÷x*/])\s*(\d+(?:\.\d+)?)"
+    r"(?:\s*([×÷x*/])\s*(\d+(?:\.\d+)?))?"
+    r"\s*=\s*(-?\d+(?:\.\d+)?)"
+)
 
 
 def apply_calculator_correction(text: str) -> str:
-    """生成テキスト中の「A × B = C」のような式を実際に計算し直し、
-    Cが誤っていれば正しい値に置き換える（末尾の重複した答えも合わせて修正する）。
+    """生成テキスト中の「A × B = C」や「A × B ÷ C = D」（割合計算等）のような
+    式を実際に計算し直し、誤っていれば正しい値に置き換える
+    （末尾の重複した答えも合わせて修正する）。
 
     モデル自体に掛け算・割り算を正確に実行させるのは小規模モデルには荷が重いため
     （sanity_checkで、数字のコピーは正確でも計算結果だけ間違うケースが多発した）、
     決定的な後処理として計算機に肩代わりさせる。CoTのフォーマットが
-    「A op B = C」に統一されていることを前提にした、実用的な折衷案。
+    「A op B (op2 C) = D」に統一されていることを前提にした、実用的な折衷案。
+
+    2025-09-14 修正: 「4124 × 29 ÷ 100 = 0.29」のような2段階の式（割合計算）に
+    未対応で素通りしていたため、2つ目の演算子・オペランドも捕捉できるよう拡張。
     """
     op_map = {"×": "*", "x": "*", "*": "*", "÷": "/", "/": "/"}
 
-    def _fix(match: re.Match) -> str:
-        a, op, b, stated = match.groups()
-        a_val, b_val = int(a), int(b)
+    def _apply_op(a: float, op: str, b: float):
         py_op = op_map.get(op, "*")
         if py_op == "*":
-            correct = a_val * b_val
-        else:
-            if b_val == 0:
-                return match.group(0)  # ゼロ除算は手を出さない
-            correct = a_val // b_val if a_val % b_val == 0 else round(a_val / b_val, 2)
+            return a * b
+        if b == 0:
+            return None
+        return a / b
 
-        if str(correct) == stated:
+    def _fix(match: re.Match) -> str:
+        a, op1, b, op2, c, stated = match.groups()
+        a_val, b_val = float(a), float(b)
+
+        result = _apply_op(a_val, op1, b_val)
+        if result is None:
+            return match.group(0)
+
+        if op2 is not None and c is not None:
+            c_val = float(c)
+            result = _apply_op(result, op2, c_val)
+            if result is None:
+                return match.group(0)
+            # 割合計算（× → ÷ の2段階）は generate_data.py 側が
+            # `base * pct // 100`（切り捨て整数）で正解を作っているため、
+            # ここも四捨五入ではなく切り捨てに合わせる。
+            if op2 in ("÷", "/"):
+                import math
+                correct = math.floor(result)
+                correct_str = str(correct)
+                if correct_str == stated:
+                    return match.group(0)
+                text_container["wrong_to_correct"][stated] = correct_str
+                return f"{a} {op1} {b} {op2} {c} = {correct_str}"
+
+        # 整数化できるなら整数、できないなら小数第2位までに丸める
+        correct = int(result) if float(result).is_integer() else round(result, 2)
+        correct_str = str(correct)
+
+        if correct_str == stated:
             return match.group(0)  # 既に正しい
 
         # 誤って述べられた数値を、後続の「答えは○○」等でも合わせて修正する
-        text_container["wrong_to_correct"][stated] = str(correct)
-        return f"{a} {op} {b} = {correct}"
+        text_container["wrong_to_correct"][stated] = correct_str
+
+        if op2 is not None and c is not None:
+            return f"{a} {op1} {b} {op2} {c} = {correct_str}"
+        return f"{a} {op1} {b} = {correct_str}"
 
     text_container = {"wrong_to_correct": {}}
     corrected = _CALC_EXPR_RE.sub(_fix, text)
@@ -63,6 +100,7 @@ def apply_calculator_correction(text: str) -> str:
         corrected = re.sub(rf"(?<!\d){re.escape(wrong)}(?!\d)", correct, corrected)
 
     return corrected
+
 
 
 def load_model_and_tokenizer(config: dict, checkpoint_path: str, device: torch.device):

@@ -52,8 +52,15 @@ def generate_arithmetic_data(count: int) -> list[dict]:
         template_input, template_cot, template_ans = random.choice(templates)
         # テンプレートに合わせた具体値を生成（cot末尾に答え確認の1引数を追加）
         if "割り勘" in template_input:
-            amount = random.randint(1200, 10000)
+            # 修正: 以前は amount // people（切り捨て）を正解にしつつ、CoT文では
+            # 「amount ÷ people = 切り捨て値」とまるで割り切れるかのように書いており、
+            # 数学的に矛盾していた（例: 2882 ÷ 8 は実際には360.25で360ではない）。
+            # digit分割トークナイザー導入でモデルの掛け算・割り算精度が上がった結果、
+            # モデルが正しく360.25を計算してしまい「不正解」判定される矛盾が表面化した。
+            # 常に割り切れる組み合わせ（peopleの倍数をamountにする）に限定して解消する。
             people = random.randint(2, 10)
+            per_person = random.randint(120, 1000)
+            amount = people * per_person
             result = amount // people
             input_text = template_input.format(people, amount)
             cot_text = template_cot.format(amount, people, amount, people, result, result)

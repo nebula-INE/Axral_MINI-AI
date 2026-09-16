@@ -28,8 +28,12 @@ def main():
     parser.add_argument("--vocab_size", type=int, default=16000)
     parser.add_argument("--model_prefix", default="spm_16k", help="出力ファイル名の接頭辞")
     parser.add_argument("--model_type", default="bpe", choices=["bpe", "unigram", "char", "word"])
-    parser.add_argument("--character_coverage", type=float, default=0.9995,
-                        help="日本語のような文字種が多い言語では0.9995〜0.9999推奨")
+    parser.add_argument("--character_coverage", type=float, default=0.9999,
+                        help="低頻度の文字（新しく追加したQAトピックの固有名詞・専門用語等）が"
+                             "vocab_sizeの制約で切り捨てられ<unk>化するのを防ぐため、"
+                             "デフォルトを0.9995→0.9999に引き上げ。日本語のような文字種が"
+                             "多い言語では1.0に近いほど安全（実データで、沖縄/亜熱帯/エベレスト等"
+                             "の低頻度語が<unk>化する問題が発生したため変更）。")
     parser.add_argument("--split_digits", type=lambda x: x.lower() != "false", default=True,
                         help="数字を1文字ずつ分割してトークン化するか（デフォルトTrue）。"
                              "算数タスクでは繰り上がりを含む筆算的な処理を学習しやすくするため強く推奨。"

@@ -21,7 +21,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from src.model import TransformerLM
 from src.data import build_dataloaders
 from src.eval import evaluate
-from src.utils import load_config, save_checkpoint, find_latest_checkpoint, load_checkpoint
+from src.utils import load_config, save_checkpoint, find_latest_checkpoint, load_checkpoint, compute_tokenizer_fingerprint
 
 
 def get_linear_schedule_with_warmup(optimizer, num_warmup_steps: int, num_training_steps: int):
@@ -89,6 +89,7 @@ def train(config_path: str):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer, tok_meta = load_tokenizer(config["data"].get("tokenizer_path"))
+    tokenizer_fp = compute_tokenizer_fingerprint(config["data"].get("tokenizer_path"))
 
     model_cfg = dict(config["model"])
     model_cfg["vocab_size"] = config["data"].get("vocab_size", 16000)
@@ -134,8 +135,22 @@ def train(config_path: str):
     if train_cfg.get("resume_from_checkpoint", False):
         latest = find_latest_checkpoint(ckpt_dir)
         if latest:
-            global_step = load_checkpoint(latest, model, optimizer, scheduler, map_location=device)
-            log(f"Resumed from {latest} at step {global_step}")
+            try:
+                global_step = load_checkpoint(
+                    latest, model, optimizer, scheduler, map_location=device,
+                    expected_tokenizer_fingerprint=tokenizer_fp,
+                )
+                log(f"Resumed from {latest} at step {global_step}")
+            except RuntimeError as e:
+                # トークナイザー不一致を検出した場合は、汚染された状態で学習を
+                # 続けるより安全な「新規学習」にフォールバックする。
+                # ckpt_dir を退避してから0から学習し直す（古いcheckpointは残す）。
+                log(f"⚠️ {e}")
+                backup_dir = f"{ckpt_dir}_incompatible_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                os.rename(ckpt_dir, backup_dir)
+                os.makedirs(ckpt_dir, exist_ok=True)
+                log(f"⚠️ 互換性の無いcheckpointを {backup_dir} に退避し、0から学習を開始します。")
+                global_step = 0
 
     session_start = datetime.now()
     max_session_time = timedelta(minutes=config.get("kaggle", {}).get("max_session_time_minutes", 540))
@@ -155,7 +170,7 @@ def train(config_path: str):
             elapsed = datetime.now() - session_start
             if elapsed > max_session_time * 0.9:
                 log(f"⚠️ セッション時間制限に接近。step {global_step} でcheckpoint保存して終了します。")
-                save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir)
+                save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir, tokenizer_fingerprint=tokenizer_fp)
                 stop_training = True
                 break
 
@@ -192,7 +207,7 @@ def train(config_path: str):
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         no_improve_count = 0
-                        save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir, is_best=True)
+                        save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir, is_best=True, tokenizer_fingerprint=tokenizer_fp)
                         log(f"✓ Best checkpoint 保存 (val_loss={val_loss:.4f})")
                     else:
                         no_improve_count += 1
@@ -202,7 +217,7 @@ def train(config_path: str):
                             break
 
                 if global_step % train_cfg.get("checkpoint_frequency", 1000) == 0:
-                    save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir)
+                    save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir, tokenizer_fingerprint=tokenizer_fp)
 
     log(f"✓ Training complete at step {global_step}")
     if use_wandb:

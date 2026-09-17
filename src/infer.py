@@ -106,8 +106,17 @@ def apply_calculator_correction(text: str) -> str:
 def load_model_and_tokenizer(config: dict, checkpoint_path: str, device: torch.device):
     """config・checkpointからモデルとSentencePieceトークナイザーを構築する。
     再利用しやすいよう関数化（他スクリプトからのimportも想定）。
+
+    checkpointに記録されたtokenizer_fingerprint（train.py参照）と、現在
+    configが指すトークナイザーの指紋を比較し、不一致なら例外を投げる。
+    以前、古いKaggle Dataset上の固定パスのcheckpointを、トークナイザー変更後の
+    configに対してそのまま読み込んでしまい、意味不明な文字列が生成される事故が
+    繰り返し発生したため（train.pyのresume時には指紋チェックを入れていたが、
+    推論経路には入れていなかった抜け穴）。
     """
     import sentencepiece as spm
+
+    from src.utils import compute_tokenizer_fingerprint
 
     tokenizer_path = config["data"].get("tokenizer_path")
     if not tokenizer_path:
@@ -126,6 +135,22 @@ def load_model_and_tokenizer(config: dict, checkpoint_path: str, device: torch.d
     model = TransformerLM(model_cfg).to(device)
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    current_fp = compute_tokenizer_fingerprint(tokenizer_path)
+    stored_fp = checkpoint.get("tokenizer_fingerprint")
+    if stored_fp is not None and current_fp is not None and stored_fp != current_fp:
+        raise RuntimeError(
+            f"checkpoint '{checkpoint_path}' は現在のトークナイザー（{tokenizer_path}）とは"
+            f"異なるトークナイザーで学習されています（checkpoint側: {stored_fp}, 現在: {current_fp}）。\n"
+            f"このまま推論すると、トークンIDの意味がズレて意味不明な文字列が生成されます。\n"
+            f"対処: 今回学習し直した checkpoint（例: results/checkpoints/p1_cot20/checkpoint_best.pt）を"
+            f"指定してください。古いKaggle Dataset上の固定パスのcheckpointは、"
+            f"トークナイザーを変更した時点で無効になっています。"
+        )
+    if stored_fp is None:
+        print("⚠️  このcheckpointにはトークナイザー指紋が記録されていません（旧バージョン）。"
+              "現在のトークナイザーと一致しているか手動で確認してください。")
+
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     print(f"✓ checkpoint 読み込み完了: {checkpoint_path} (step={checkpoint.get('step', '?')})")

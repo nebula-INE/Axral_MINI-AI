@@ -189,11 +189,41 @@ def generate_qa_data(count: int) -> list[dict]:
         ("エベレスト", "まず、エベレストが何かを確認する。ネパールと中国の国境にある、世界最高峰の山である。", "世界最高峰の山"),
     ]
 
+    def _vary_question(q: str) -> str:
+        """質問文の意味を変えずに、聞き方（言い回し）だけをランダムに変える。
+
+        以前は「？」の有無だけの単純なバリエーションしかなく、
+        「日本の首都はどこですか？」という固定文型にしか対応できなかった。
+        「〜を教えて」「〜について教えて」等、聞き方自体の多様なパターンを
+        混ぜることで、未知の言い回しへの汎化性能向上を狙う
+        （sanity_checkで、固定文型からわずかに外れた質問に弱いことが判明したため）。
+        """
+        base = q.rstrip("？")
+        variants = [q]  # 元の文はそのまま候補に残す
+
+        if base.endswith("とは"):
+            # 「ピタゴラスの定理とは」→「〜とはについて教えて」のような
+            # 「とは」の二重表現になるのを防ぐため、「とは」を除去してから繋げる
+            stem = base[:-2]
+            variants.append(f"{stem}とは？")
+            variants.append(f"{stem}について教えて")
+            variants.append(f"{stem}とは何ですか？")
+        elif base.endswith("ですか"):
+            stem = base[:-3]  # "ですか" を除去
+            variants.append(f"{stem}？")
+            variants.append(f"{stem}を教えて")
+            variants.append(f"{stem}について教えて")
+        else:
+            variants.append(f"{base}？")
+            variants.append(f"{base}を教えて")
+            variants.append(f"{base}について教えて")
+
+        return random.choice(variants)
+
     data = []
     for i in range(count):
         q, explanation, ans = random.choice(qa_pairs)
-        # 質問に多少バリエーションをつける（「？」の有無）
-        q_var = q if i % 3 != 0 or not q.endswith("？") else q.replace("？", "")
+        q_var = _vary_question(q)
         cot_text = f"{explanation}よって、答えは{ans}である。"
         data.append({
             "id": f"qa_{datetime.now().strftime('%Y%m%d')}_{i:05d}",

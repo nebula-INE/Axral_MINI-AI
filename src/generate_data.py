@@ -353,6 +353,15 @@ def main():
     parser.add_argument("--output_dir", required=True, help="出力ディレクトリ")
     parser.add_argument("--num_samples", type=int, default=50000, help="総サンプル数")
     parser.add_argument("--seed", type=int, default=42, help="乱数seed")
+    parser.add_argument("--cot_ratio", type=float, default=1.0,
+                        help="CoT（思考過程）を付与するサンプルの割合（0.0〜1.0）。"
+                             "plan §Gate3 のCoT比率A/B実験（cot20/cot40/cot60）用。"
+                             "1.0未満にすると、その割合の残りのサンプルは cot フィールドを"
+                             "空にし、[BOS] input answer [EOS] という直接回答形式にする"
+                             "（generate()側の挙動は変えず、データ側だけで制御する）。")
+    parser.add_argument("--version", default="v001",
+                        help="出力ファイル名に使うバージョンタグ（例: v001, v_cot40）。"
+                             "異なる実験のデータを別ファイルとして共存させるために使う。")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -368,7 +377,7 @@ def main():
 
     all_data = []
 
-    print(f"合成データ生成開始（全{args.num_samples}件）...")
+    print(f"合成データ生成開始（全{args.num_samples}件、cot_ratio={args.cot_ratio}）...")
 
     # 各カテゴリごとに生成
     for category, ratio in ratios.items():
@@ -389,6 +398,22 @@ def main():
         all_data.extend(data)
         print(f" ✓")
 
+    # CoT比率の適用: cot_ratio未満の割合のサンプルは cot を空にする
+    # （カテゴリを問わず全体に対して一様に適用。plan Gate3のA/B実験用）
+    if args.cot_ratio < 1.0:
+        cot_kept = 0
+        for item in all_data:
+            if random.random() < args.cot_ratio:
+                item["meta"]["has_cot"] = True
+                cot_kept += 1
+            else:
+                item["cot"] = ""
+                item["meta"]["has_cot"] = False
+        print(f"  CoT付与: {cot_kept}/{len(all_data)}件（目標比率 {args.cot_ratio:.0%}）")
+    else:
+        for item in all_data:
+            item["meta"]["has_cot"] = True
+
     # シャッフル
     random.shuffle(all_data)
 
@@ -398,21 +423,21 @@ def main():
     val_data = all_data[split_idx:]
 
     # train.jsonl を保存
-    train_path = f"{args.output_dir}/v001.train.jsonl"
+    train_path = f"{args.output_dir}/{args.version}.train.jsonl"
     with open(train_path, "w", encoding="utf-8") as f:
         for item in train_data:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
     print(f"✓ {train_path} 保存完了（{len(train_data)}件）")
 
     # val.jsonl を保存
-    val_path = f"{args.output_dir}/v001.val.jsonl"
+    val_path = f"{args.output_dir}/{args.version}.val.jsonl"
     with open(val_path, "w", encoding="utf-8") as f:
         for item in val_data:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
     print(f"✓ {val_path} 保存完了（{len(val_data)}件）")
 
     # corpus.txt（SentencePiece 学習用）を出力
-    corpus_path = f"{args.output_dir}/corpus.txt"
+    corpus_path = f"{args.output_dir}/{args.version}_corpus.txt"
     with open(corpus_path, "w", encoding="utf-8") as f:
         for item in all_data:
             f.write(item["input"] + " ")

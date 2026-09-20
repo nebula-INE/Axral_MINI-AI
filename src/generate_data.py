@@ -208,6 +208,7 @@ def generate_qa_data(count: int) -> list[dict]:
             variants.append(f"{stem}とは？")
             variants.append(f"{stem}について教えて")
             variants.append(f"{stem}とは何ですか？")
+            variants.append(f"{stem}といえば？")
         elif base.endswith("ですか"):
             stem = base[:-3]  # "ですか" を除去
             variants.append(f"{stem}？")
@@ -217,6 +218,17 @@ def generate_qa_data(count: int) -> list[dict]:
             variants.append(f"{base}？")
             variants.append(f"{base}を教えて")
             variants.append(f"{base}について教えて")
+
+        # 「Xといえば？」（Xから連想させる聞き方）は上とは独立に、
+        # 質問文からトピック名（先頭の固有名詞・名詞らしき部分）を大まかに
+        # 抜き出して追加する。トピック抽出は簡易的に「は/が/の/です/？」等の
+        # 助詞・記号の直前までを使う。
+        import re as _re
+        topic_match = _re.match(r"^([^\sはがのとですか？]+)", base)
+        if topic_match:
+            topic = topic_match.group(1)
+            if len(topic) >= 2:  # 短すぎる断片は除外
+                variants.append(f"{topic}といえば？")
 
         return random.choice(variants)
 

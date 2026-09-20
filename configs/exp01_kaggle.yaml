@@ -1,9 +1,9 @@
 # configs/exp01.yaml のKaggle Dataset利用版。
-# 既存データセット sekoia29/axral-mini-ai-dataset を使う想定。
-# パスは環境によって変わりうるので、実行前に必ず確認すること:
-#   - Notebook右側「Add Input」で追加した場合: /kaggle/input/axral-mini-ai-dataset/...
-#   - kagglehub.dataset_download() 等で取得した場合: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/...
-#     （ユーザーの環境ではこちらのパスだった）
+# 2026-09-13 kaggle datasets create で作成成功した
+# sekoia29/vose-initial-llm-data-v001 を使う。
+# このKaggle環境では /kaggle/input 直下が datasets/notebooks に分かれており、
+# 実際のマウントパスは /kaggle/input/datasets/<username>/<slug>/ であることを確認済み
+# （os.listdir("/kaggle/input/datasets/sekoia29") で確認）。
 
 experiment_name: p1_cot20
 
@@ -26,10 +26,9 @@ optimizer:
   weight_decay: 1.0e-5
 
 data:
-  # ↓ 実際に確認したパス（/kaggle/input/datasets/sekoia29/axral-mini-ai-dataset）に合わせてある
-  train_path: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/v001_processed.train.jsonl
-  val_path: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/v001_processed.val.jsonl
-  tokenizer_path: /kaggle/input/datasets/sekoia29/axral-mini-ai-dataset/spm_16k.model  # まだ無ければnullに
+  train_path: /kaggle/input/datasets/sekoia29/vose-initial-llm-data-v001/v001_processed.train.jsonl
+  val_path: /kaggle/input/datasets/sekoia29/vose-initial-llm-data-v001/v001_processed.val.jsonl
+  tokenizer_path: /kaggle/input/datasets/sekoia29/vose-initial-llm-data-v001/spm_16k.model
   vocab_size: 16000
   batch_size: 16
   eval_batch_size: 16

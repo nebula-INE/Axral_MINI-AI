@@ -20,8 +20,8 @@ optimizer:
   weight_decay: 1.0e-5
 
 data:
-  train_path: data/v_cot40.train.jsonl
-  val_path: data/v_cot40.val.jsonl
+  train_path: data/v_cot40_processed.train.jsonl
+  val_path: data/v_cot40_processed.val.jsonl
   tokenizer_path: data/spm_16k_v4.model
   vocab_size: 4000
   batch_size: 16

@@ -43,6 +43,28 @@ class JsonlLMDataset(Dataset):
                     continue
                 self.examples.append(json.loads(line))
 
+        # 安全チェック: 前処理（preprocess.py）を通していない生データ
+        # （generate_data.py の直接出力）を誤って渡すと、token_ids フィールドが
+        # 存在せず全サンプルが空リストになり、[BOS][EOS] だけの中身の無い系列を
+        # 大量に学習してしまう事故が実際に発生した（Gate3実験のconfigで
+        # train_path が生データを指しており、生成が完全に空になった）。
+        # ここで早期に検出し、原因不明の「学習はできるが生成が空になる」を防ぐ。
+        if self.examples:
+            sample_size = min(50, len(self.examples))
+            nonempty_count = sum(
+                1 for ex in self.examples[:sample_size] if ex.get("token_ids")
+            )
+            if nonempty_count == 0:
+                raise ValueError(
+                    f"'{path}' の token_ids が（サンプル{sample_size}件中）全て空です。\n"
+                    f"前処理（preprocess.py）を通していない生データを直接読み込もうとしている"
+                    f"可能性が高いです。configの data.train_path / data.val_path が\n"
+                    f"  ✗ data/xxx.train.jsonl（generate_data.py の直接出力）\n"
+                    f"ではなく\n"
+                    f"  ✓ data/xxx_processed.train.jsonl（preprocess.py の出力）\n"
+                    f"を指しているか確認してください。"
+                )
+
         self.pad_id = pad_id
         self.bos_id = bos_id
         self.eos_id = eos_id

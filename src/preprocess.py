@@ -142,9 +142,20 @@ def main():
 
     print("前処理パイプライン開始...")
 
-    # 出力ファイルを明示的に指定（上書きしない）
-    train_output = str(output_dir / "v001_processed.train.jsonl")
-    val_output = str(output_dir / "v001_processed.val.jsonl")
+    # 出力ファイル名は入力train_pathのバージョンタグから自動生成する
+    # （修正前は "v001_processed.train.jsonl" に固定されており、
+    #  v_cot20/v_cot40/v_cot60 のように複数バージョンを処理すると
+    #  同じファイルを毎回上書きしてしまうバグがあった。
+    #  Gate3のCoT比率A/B実験で3バージョンを扱うようになり発覚）。
+    # 例: "data/v_cot20.train.jsonl" -> "v_cot20"
+    train_basename = Path(args.train_path).name
+    if train_basename.endswith(".train.jsonl"):
+        version_tag = train_basename[: -len(".train.jsonl")]
+    else:
+        version_tag = Path(args.train_path).stem  # フォールバック
+
+    train_output = str(output_dir / f"{version_tag}_processed.train.jsonl")
+    val_output = str(output_dir / f"{version_tag}_processed.val.jsonl")
 
     # === Train データ処理 ===
     print(f"段階4-9: Train データ処理中...", end="", flush=True)
@@ -175,7 +186,7 @@ def main():
     print(f"  平均 CoT スコア: {train_stats['avg_cot_score']:.3f}")
 
     # ログ保存
-    log_path = output_dir / f"v001_preprocessing_log.json"
+    log_path = output_dir / f"{version_tag}_preprocessing_log.json"
     with open(log_path, "w", encoding="utf-8") as f:
         json.dump(log, f, ensure_ascii=False, indent=2)
     print(f"\n✓ {log_path} 保存完了")

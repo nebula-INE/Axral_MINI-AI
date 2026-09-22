@@ -34,6 +34,11 @@ CONFIGS = {
     "v_cot40": "configs/exp_cot40.yaml",
     "v_cot60": "configs/exp_cot60.yaml",
 }
+EXPERIMENT_NAMES = {
+    "v_cot20": "p1_cot20_gate3",
+    "v_cot40": "p1_cot40_gate3",
+    "v_cot60": "p1_cot60_gate3",
+}
 
 
 def run(cmd: list[str], step_name: str) -> None:
@@ -134,8 +139,90 @@ for version, _ in COT_VERSIONS:
         [sys.executable, "-m", "src.train", "--config", config_path],
         f"学習（{version}, config={config_path}）",
     )
+    ckpt_path = f"results/checkpoints/{EXPERIMENT_NAMES[version]}/checkpoint_best.pt"
+    require_file(ckpt_path, f"学習（{version}）")
 
 print("\n" + "=" * 60)
 print("🎉 Gate3パイプライン、全ステップ完了")
 print("=" * 60)
+
+# ============================================================
+# 5. checkpointとデータをKaggle Datasetに退避
+# ============================================================
+# /kaggle/working はセッションが切れると消える一時領域のため、
+# セッション終了前に学習成果を必ずKaggle Datasetへアップロードしておく
+# （過去に何度も「セッションが切れてcheckpointごと消えた」事故が起きたため）。
+print("\n" + "=" * 60)
+print("▶ checkpoint・データをKaggle Datasetへ退避")
+print("=" * 60)
+
+KAGGLE_DATASET_DIR = os.path.join(PROJECT_ROOT, "kaggle_dataset")
+os.makedirs(KAGGLE_DATASET_DIR, exist_ok=True)
+
+# 5-1. package_kaggle_dataset.py で data/ 配下の必須ファイル一式をコピーし、
+#      dataset-metadata.json を自動生成する（既存の仕組みを流用）
+try:
+    run(
+        [sys.executable, "src/package_kaggle_dataset.py"],
+        "kaggle_dataset/ へのデータファイルコピー",
+    )
+except RuntimeError as e:
+    print(f"⚠️ {e}")
+    print("⚠️ データファイルのコピーに失敗しましたが、checkpointのコピーは続行します。")
+
+# 5-2. 3実験分のcheckpointを、experiment_nameを含む名前でコピー
+#      （同じ "checkpoint_best.pt" のまま3つコピーすると上書きされるため）
+import shutil
+
+copied_checkpoints = []
+for version, _ in COT_VERSIONS:
+    exp_name = EXPERIMENT_NAMES[version]
+    src_ckpt = os.path.join(PROJECT_ROOT, f"results/checkpoints/{exp_name}/checkpoint_best.pt")
+    if os.path.exists(src_ckpt):
+        dst_name = f"checkpoint_best_{exp_name}.pt"
+        dst_ckpt = os.path.join(KAGGLE_DATASET_DIR, dst_name)
+        shutil.copy(src_ckpt, dst_ckpt)
+        print(f"  ✓ {dst_name} ({os.path.getsize(dst_ckpt):,} bytes)")
+        copied_checkpoints.append(dst_name)
+    else:
+        print(f"  ✗ {src_ckpt} が見つかりません（このcheckpointは退避されません）")
+
+# 5-3. dataset-metadata.json の id がプレースホルダのままでないか確認してからアップロード
+metadata_path = os.path.join(KAGGLE_DATASET_DIR, "dataset-metadata.json")
+should_upload = False
+if os.path.exists(metadata_path):
+    import json as _json
+    with open(metadata_path, encoding="utf-8") as f:
+        meta = _json.load(f)
+    dataset_id = meta.get("id", "")
+    if "YOUR_KAGGLE_USERNAME" in dataset_id:
+        print(f"\n🛑 dataset-metadata.json の id がプレースホルダのままです（{dataset_id}）。")
+        print("   アップロードをスキップします。checkpointは kaggle_dataset/ に")
+        print("   コピー済みなので、id を修正してから手動で以下を実行してください:")
+        print("     kaggle datasets version -p kaggle_dataset/ -m '更新内容'")
+    else:
+        should_upload = True
+        print(f"\n  dataset id: {dataset_id}")
+else:
+    print("\n⚠️ dataset-metadata.json が見つからないため、アップロードをスキップします。")
+
+if should_upload and copied_checkpoints:
+    result = subprocess.run(
+        [
+            "kaggle", "datasets", "version",
+            "-p", KAGGLE_DATASET_DIR,
+            "-m", "Gate3実験（cot20/40/60）のcheckpoint・データを更新",
+        ],
+        cwd=PROJECT_ROOT,
+    )
+    if result.returncode == 0:
+        print("\n✅ Kaggle Datasetへのアップロード完了")
+    else:
+        print(f"\n⚠️ アップロードに失敗しました（終了コード {result.returncode}）。")
+        print("   ただし学習・checkpointの保存自体は正常に完了しています。")
+        print("   kaggle_dataset/ の中身を確認し、手動で再アップロードしてください。")
+elif not copied_checkpoints:
+    print("\n⚠️ コピーできたcheckpointが1つも無いため、アップロードをスキップしました。")
+
 print("\n次に sanity_check.py で3つのcheckpointを比較してください。")
+print("（今後セッションが切れても、Kaggle Dataset側からcheckpointを復元できます）")

@@ -19,6 +19,7 @@ import re
 
 import torch
 
+from src.knowledge_base import UNKNOWN_TOPIC_RESPONSE, is_known_topic
 from src.model import TransformerLM
 from src.utils import load_config
 
@@ -169,6 +170,7 @@ def generate_answer(
     strategy: str = "greedy",
     temperature: float = 0.8,
     use_calculator: bool = True,
+    use_topic_guard: bool = True,
 ) -> str:
     """入力テキストに対して [BOS] + input_ids を渡して自己回帰生成する。
     学習時と同じ構造（[BOS] input_ids cot answer [EOS]）を踏襲する。
@@ -176,7 +178,15 @@ def generate_answer(
 
     use_calculator=True（デフォルト）の場合、生成テキスト中の「A × B = C」形式の
     計算式を検算し、誤っていれば正しい値に自動訂正する（apply_calculator_correction参照）。
+
+    use_topic_guard=True（デフォルト）の場合、生成前に入力テキストが既知の54トピック
+    （src/knowledge_base.py, generate_data.QA_KNOWLEDGE_PAIRSベース）に関連するかを判定し、
+    未知のトピックであればモデルを呼び出さずにUNKNOWN_TOPIC_RESPONSEを返す
+    （未学習の話題に自信満々で誤った内容を答えてしまう問題への安全弁）。
     """
+    if use_topic_guard and not is_known_topic(text):
+        return UNKNOWN_TOPIC_RESPONSE
+
     input_ids = [tok_meta["bos_id"]] + sp.EncodeAsIds(text)
     input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
 
@@ -209,6 +219,9 @@ def _main():
     parser.add_argument("--temperature", type=float, default=0.8, help="sampling時のみ使用")
     parser.add_argument("--no_calculator", action="store_true",
                         help="計算式の自動検算・訂正を無効化する（モデル本来の計算力を見たい場合）")
+    parser.add_argument("--no_topic_guard", action="store_true",
+                        help="既知トピック判定（未知の話題への「分かりません」ガード）を無効化する"
+                             "（モデル本来の知識の範囲を確認したい場合）")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -222,6 +235,7 @@ def _main():
             strategy=args.strategy,
             temperature=args.temperature,
             use_calculator=not args.no_calculator,
+            use_topic_guard=not args.no_topic_guard,
         )
 
     if args.interactive:

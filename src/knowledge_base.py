@@ -2,10 +2,10 @@
 knowledge_base.py
 既知トピック判定（infer.pyの安全弁）。
 
-generate_data.QA_KNOWLEDGE_PAIRS（学習データ生成にも使われる54件のQAペア）を
-単一の情報源として再利用し、モデルが学習していないはずの話題について
-自信満々で誤った内容を生成してしまう問題への対処として、
-「既知の54トピックに一致しない質問には、無理に答えず分かりませんと言わせる」
+generate_data.py の学習データ（QA_KNOWLEDGE_PAIRS・TECH_SAMPLES・CODE_SAMPLES・
+CONVERSATION_SAMPLES）を単一の情報源として再利用し、モデルが学習していないはずの
+話題について自信満々で誤った内容を生成してしまう問題への対処として、
+「学習済みの話題に一致しない質問には、無理に答えず分かりませんと言わせる」
 判定ロジックを提供する。
 
 背景: sanity_checkで「日本の面積は？」のような未学習の話題に対し、
@@ -26,7 +26,12 @@ from __future__ import annotations
 
 import re
 
-from src.generate_data import QA_KNOWLEDGE_PAIRS
+from src.generate_data import (
+    CODE_SAMPLES,
+    CONVERSATION_SAMPLES,
+    QA_KNOWLEDGE_PAIRS,
+    TECH_SAMPLES,
+)
 
 # attr（属性部分）の末尾からそぎ落とす定型的な語尾・助詞。
 # 長いものから順に試し、除去後も2文字以上残る場合のみ除去する
@@ -105,14 +110,33 @@ def _split_entity_attr(question: str) -> tuple[str, str | None]:
 
 
 def _build_known_topic_pairs() -> list[tuple[str, str | None]]:
+    """既知トピック一覧を構築する。
+
+    QA_KNOWLEDGE_PAIRS（地理・科学・IT・歴史の一般知識、54件）だけでなく、
+    TECH_SAMPLES（技術文書）・CODE_SAMPLES（コード）・CONVERSATION_SAMPLES（挨拶等の会話）
+    も合わせて対象にする。
+
+    2025-09-XX 修正: 当初QA_KNOWLEDGE_PAIRSのみを対象にしていたため、
+    「こんにちは」のような挨拶や「JSONファイルの読み込み方法は？」のような
+    技術質問まで「未学習トピック」と誤判定してガードがブロックしてしまう
+    退行バグが発生した（これらは元々別カテゴリとしてモデルが学習済みのため）。
+    generate_data.pyの全カテゴリ（算数を除く）を既知トピック判定の対象に含めることで解消する。
+    算数（arithmetic）は含めない: 数字を含む入力は is_known_topic() 側で
+    そもそも判定をスキップし常に「既知」扱いにしているため、ここに加える必要がない。
+    """
     pairs: list[tuple[str, str | None]] = []
-    for question, _explanation, _answer in QA_KNOWLEDGE_PAIRS:
+    for question, _explanation, _answer in (
+        *QA_KNOWLEDGE_PAIRS,
+        *TECH_SAMPLES,
+        *CODE_SAMPLES,
+        *CONVERSATION_SAMPLES,
+    ):
         pairs.append(_split_entity_attr(question))
     return pairs
 
 
-# 54件のQAペアから抽出した (主題, 属性) のペア一覧。
-# import時に一度だけ構築する（QA_KNOWLEDGE_PAIRS自体は不変なので毎回計算不要）。
+# 既知トピック（QA・技術・コード・会話の全カテゴリ）から抽出した (主題, 属性) のペア一覧。
+# import時に一度だけ構築する（元データはいずれも不変なので毎回計算不要）。
 KNOWN_TOPIC_PAIRS: list[tuple[str, str | None]] = _build_known_topic_pairs()
 
 UNKNOWN_TOPIC_RESPONSE = (
@@ -121,7 +145,8 @@ UNKNOWN_TOPIC_RESPONSE = (
 
 
 def is_known_topic(text: str) -> bool:
-    """入力テキストが既知の54トピックのいずれかに関連するかを判定する。
+    """入力テキストが学習済みの既知トピック（QA・技術・コード・会話）のいずれかに
+    関連するかを判定する。
 
     数字を含む入力（算数・割合問題など）は判定をスキップし、常にTrueを返す
     （calculatorによる検算の対象であり、話題知識の範囲外のため）。

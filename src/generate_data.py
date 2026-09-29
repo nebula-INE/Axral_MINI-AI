@@ -263,25 +263,28 @@ def generate_qa_data(count: int) -> list[dict]:
     return data
 
 
+TECH_SAMPLES: list[tuple[str, str, str]] = [
+    ("Pythonでリストから重複を除く方法は？",
+     "まず、集合（set）を使う方法を検討する。list(set(original_list))で重複なしリストが得られる。"
+     "次に、順序保持が必要か確認する。順序を保ちたい場合は辞書を使う。"
+     "よって、list(dict.fromkeys(original_list))を使うのがよい。",
+     "set()を使う方法またはdict.fromkeys()を使う方法"),
+    ("JSONファイルの読み込み方法は？",
+     "まず、Pythonの標準ライブラリを確認する。jsonモジュールが利用できる。"
+     "次に、読み込みコードを組み立てる。よって、"
+     "import json; data = json.load(open('file.json'))で読み込める。",
+     "json.load()を使用"),
+    ("SQLのJOINとは？",
+     "まず、複数テーブルの結合が必要な場面を確認する。次に、JOINの種類を整理する。"
+     "INNER JOIN、LEFT JOIN、RIGHT JOIN、FULL OUTER JOINがある。"
+     "よって、目的に応じて適切なJOINを選択する。",
+     "複数テーブルを結合する操作"),
+]
+
+
 def generate_technical_data(count: int) -> list[dict]:
     """技術文書・仕様書（25%）。まず/次に/よって等の接続詞でステップ性を明示する。"""
-    tech_samples = [
-        ("Pythonでリストから重複を除く方法は？",
-         "まず、集合（set）を使う方法を検討する。list(set(original_list))で重複なしリストが得られる。"
-         "次に、順序保持が必要か確認する。順序を保ちたい場合は辞書を使う。"
-         "よって、list(dict.fromkeys(original_list))を使うのがよい。",
-         "set()を使う方法またはdict.fromkeys()を使う方法"),
-        ("JSONファイルの読み込み方法は？",
-         "まず、Pythonの標準ライブラリを確認する。jsonモジュールが利用できる。"
-         "次に、読み込みコードを組み立てる。よって、"
-         "import json; data = json.load(open('file.json'))で読み込める。",
-         "json.load()を使用"),
-        ("SQLのJOINとは？",
-         "まず、複数テーブルの結合が必要な場面を確認する。次に、JOINの種類を整理する。"
-         "INNER JOIN、LEFT JOIN、RIGHT JOIN、FULL OUTER JOINがある。"
-         "よって、目的に応じて適切なJOINを選択する。",
-         "複数テーブルを結合する操作"),
-    ]
+    tech_samples = TECH_SAMPLES
 
     data = []
     for i in range(count):
@@ -301,19 +304,22 @@ def generate_technical_data(count: int) -> list[dict]:
     return data
 
 
+CODE_SAMPLES: list[tuple[str, str, str]] = [
+    ("Pythonでリストをソートするコードは？",
+     "まず、対象のリストを確認する。numbers = [3, 1, 4, 1, 5]。"
+     "次に、sorted()関数を使う。sorted_numbers = sorted(numbers)  # 昇順。"
+     "よって、降順にしたい場合は reversed_numbers = sorted(numbers, reverse=True) とする。",
+     "sorted()関数を使用"),
+    ("for ループで0から9まで出力するコードは？",
+     "まず、0から9までの範囲を確認する。次に、range(10)を使う。"
+     "よって、for i in range(10):\n    print(i) と書けば0から9までを出力できる。",
+     "for i in range(10): print(i)"),
+]
+
+
 def generate_code_data(count: int) -> list[dict]:
     """コード＋解説（15%）。まず/次に/よって等の接続詞でステップ性を明示する。"""
-    code_samples = [
-        ("Pythonでリストをソートするコードは？",
-         "まず、対象のリストを確認する。numbers = [3, 1, 4, 1, 5]。"
-         "次に、sorted()関数を使う。sorted_numbers = sorted(numbers)  # 昇順。"
-         "よって、降順にしたい場合は reversed_numbers = sorted(numbers, reverse=True) とする。",
-         "sorted()関数を使用"),
-        ("for ループで0から9まで出力するコードは？",
-         "まず、0から9までの範囲を確認する。次に、range(10)を使う。"
-         "よって、for i in range(10):\n    print(i) と書けば0から9までを出力できる。",
-         "for i in range(10): print(i)"),
-    ]
+    code_samples = CODE_SAMPLES
 
     data = []
     for i in range(count):
@@ -333,13 +339,16 @@ def generate_code_data(count: int) -> list[dict]:
     return data
 
 
+CONVERSATION_SAMPLES: list[tuple[str, str, str]] = [
+    ("こんにちは", "まず、挨拶を受け取る。次に、丁寧に返答する。こんにちは。お疲れ様です。", "挨拶への応答"),
+    ("今日の天気はどう？", "まず、天気の状況を確認する。次に、要点を伝える。雲が多いですが雨は降らないでしょう。", "天気についての応答"),
+    ("昼食は何を食べた？", "まず、質問の内容を確認する。次に、実際の行動を答える。ラーメンを食べました。", "行動についての応答"),
+]
+
+
 def generate_conversation_data(count: int) -> list[dict]:
     """短文会話・対話例（10%）。短い会話でも接続詞を使い最低限のステップ性を持たせる。"""
-    conversations = [
-        ("こんにちは", "まず、挨拶を受け取る。次に、丁寧に返答する。こんにちは。お疲れ様です。", "挨拶への応答"),
-        ("今日の天気はどう？", "まず、天気の状況を確認する。次に、要点を伝える。雲が多いですが雨は降らないでしょう。", "天気についての応答"),
-        ("昼食は何を食べた？", "まず、質問の内容を確認する。次に、実際の行動を答える。ラーメンを食べました。", "行動についての応答"),
-    ]
+    conversations = CONVERSATION_SAMPLES
 
     data = []
     for i in range(count):

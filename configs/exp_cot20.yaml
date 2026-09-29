@@ -1,11 +1,11 @@
 # Gate3 CoT比率実験: cot20（CoTを20%のサンプルにのみ付与）
-experiment_name: p1_cot20_gate3
+experiment_name: p1_cot20_gate3_7m
 
 model:
-  d_model: 256
-  n_layers: 4
-  n_heads: 4
-  d_ff: 1024
+  d_model: 320
+  n_layers: 5
+  n_heads: 5
+  d_ff: 1280
   max_seq_length: 512
   dropout: 0.1
   attention_dropout: 0.1

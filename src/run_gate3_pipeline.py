@@ -35,9 +35,9 @@ CONFIGS = {
     "v_cot60": "configs/exp_cot60.yaml",
 }
 EXPERIMENT_NAMES = {
-    "v_cot20": "p1_cot20_gate3",
-    "v_cot40": "p1_cot40_gate3",
-    "v_cot60": "p1_cot60_gate3",
+    "v_cot20": "p1_cot20_gate3_7m",
+    "v_cot40": "p1_cot40_gate3_7m",
+    "v_cot60": "p1_cot60_gate3_7m",
 }
 
 

@@ -309,12 +309,98 @@ CODE_SAMPLES: list[tuple[str, str, str]] = [
      "まず、対象のリストを確認する。numbers = [3, 1, 4, 1, 5]。"
      "次に、sorted()関数を使う。sorted_numbers = sorted(numbers)  # 昇順。"
      "よって、降順にしたい場合は reversed_numbers = sorted(numbers, reverse=True) とする。",
-     "sorted()関数を使用"),
+     "sorted(numbers) または sorted(numbers, reverse=True)"),
     ("for ループで0から9まで出力するコードは？",
      "まず、0から9までの範囲を確認する。次に、range(10)を使う。"
      "よって、for i in range(10):\n    print(i) と書けば0から9までを出力できる。",
-     "for i in range(10): print(i)"),
+     "for i in range(10):\n    print(i)"),
+    ("Pythonでリスト内包表記を使って偶数だけ抽出するコードは？",
+     "まず、元のリストを確認する。numbers = [1, 2, 3, 4, 5, 6]。"
+     "次に、条件付きリスト内包表記を組み立てる。"
+     "よって、evens = [n for n in numbers if n % 2 == 0] と書ける。",
+     "[n for n in numbers if n % 2 == 0]"),
+    ("Pythonで辞書の値でループ処理するコードは？",
+     "まず、対象の辞書を確認する。d = {'a': 1, 'b': 2}。"
+     "次に、items()メソッドを使う。"
+     "よって、for key, value in d.items():\n    print(key, value) と書ける。",
+     "for key, value in d.items(): print(key, value)"),
+    ("Pythonで文字列を分割するコードは？",
+     "まず、対象の文字列を確認する。s = 'apple,banana,orange'。"
+     "次に、split()メソッドを使う。"
+     "よって、parts = s.split(',') と書けば ['apple', 'banana', 'orange'] が得られる。",
+     "s.split(',')"),
+    ("Pythonでファイルを1行ずつ読み込むコードは？",
+     "まず、対象ファイルを開く必要があることを確認する。次に、withブロックを使う。"
+     "よって、with open('file.txt') as f:\n    for line in f:\n        print(line) と書ける。",
+     "with open('file.txt') as f:\n    for line in f: print(line)"),
+    ("Pythonで例外処理を書くコードは？",
+     "まず、エラーが起きうる処理を確認する。次に、try/exceptで囲む。"
+     "よって、try:\n    x = 1 / 0\nexcept ZeroDivisionError:\n    print('ゼロ除算エラー') と書ける。",
+     "try/exceptでZeroDivisionErrorを捕捉する"),
+    ("Pythonで関数を定義するコードは？",
+     "まず、defキーワードで関数を定義する。次に、引数と戻り値を決める。"
+     "よって、def add(a, b):\n    return a + b と書ける。",
+     "def add(a, b): return a + b"),
+    ("Pythonでクラスを定義するコードは？",
+     "まず、classキーワードでクラスを定義する。次に、__init__メソッドで初期化する。"
+     "よって、class Dog:\n    def __init__(self, name):\n        self.name = name と書ける。",
+     "class Dog: def __init__(self, name): self.name = name"),
+    ("Pythonでリストの最大値を求めるコードは？",
+     "まず、対象のリストを確認する。numbers = [3, 7, 2, 9, 4]。"
+     "次に、max()関数を使う。"
+     "よって、biggest = max(numbers) と書けば9が得られる。",
+     "max(numbers)"),
+    ("Pythonで文字列を数値に変換するコードは？",
+     "まず、対象の文字列を確認する。s = '123'。"
+     "次に、int()関数を使う。よって、n = int(s) と書けば整数123に変換できる。",
+     "int(s)"),
+    ("Pythonでリストの要素数を数えるコードは？",
+     "まず、対象のリストを確認する。numbers = [1, 2, 3, 4]。"
+     "次に、len()関数を使う。よって、count = len(numbers) と書けば4が得られる。",
+     "len(numbers)"),
+    ("Pythonで辞書にキーが存在するか確認するコードは？",
+     "まず、対象の辞書を確認する。d = {'a': 1}。"
+     "次に、in演算子を使う。よって、if 'a' in d:\n    print('存在する') と書ける。",
+     "if 'a' in d: ..."),
+    ("Pythonでリストに要素を追加するコードは？",
+     "まず、対象のリストを確認する。numbers = [1, 2, 3]。"
+     "次に、append()メソッドを使う。よって、numbers.append(4) と書けば末尾に4が追加される。",
+     "numbers.append(4)"),
+    ("Pythonで2つのリストをまとめて処理するコードは？",
+     "まず、対象の2つのリストを確認する。names = ['a', 'b']、ages = [10, 20]。"
+     "次に、zip()関数を使う。"
+     "よって、for name, age in zip(names, ages):\n    print(name, age) と書ける。",
+     "for name, age in zip(names, ages): print(name, age)"),
+    ("Pythonでリストの中身を逆順にするコードは？",
+     "まず、対象のリストを確認する。numbers = [1, 2, 3]。"
+     "次に、reversed()関数かスライスを使う。"
+     "よって、reversed_list = numbers[::-1] と書けば逆順になる。",
+     "numbers[::-1]"),
+    ("Pythonで文字列を連結するコードは？",
+     "まず、対象の文字列を確認する。a = 'Hello'、b = 'World'。"
+     "次に、+演算子かf文字列を使う。よって、result = f'{a}, {b}!' と書ける。",
+     "f'{a}, {b}!'"),
+    ("PythonでCSVファイルを読み込むコードは？",
+     "まず、標準ライブラリを確認する。csvモジュールが使える。"
+     "次に、読み込みコードを組み立てる。"
+     "よって、import csv\nwith open('file.csv') as f:\n    reader = csv.reader(f) と書ける。",
+     "csvモジュールのcsv.reader()を使用"),
+    ("Pythonでリストから条件に合う最初の要素を探すコードは？",
+     "まず、対象のリストを確認する。numbers = [1, 3, 5, 8, 9]。"
+     "次に、next()とジェネレータ式を使う。"
+     "よって、result = next(n for n in numbers if n % 2 == 0) と書けば8が得られる。",
+     "next(n for n in numbers if n % 2 == 0)"),
+    ("Pythonで辞書を値でソートするコードは？",
+     "まず、対象の辞書を確認する。d = {'a': 3, 'b': 1, 'c': 2}。"
+     "次に、sorted()とitems()、key引数を使う。"
+     "よって、sorted(d.items(), key=lambda x: x[1]) と書けば値の昇順になる。",
+     "sorted(d.items(), key=lambda x: x[1])"),
+    ("Pythonで無限ループを書くコードは？",
+     "まず、終了条件を必ず用意することを確認する。次に、while Trueとbreakを使う。"
+     "よって、while True:\n    if condition:\n        break と書ける。",
+     "while True: ... break"),
 ]
+
 
 
 def generate_code_data(count: int) -> list[dict]:

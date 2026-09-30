@@ -21,6 +21,7 @@ import torch
 
 from src.knowledge_base import UNKNOWN_TOPIC_RESPONSE, is_known_topic
 from src.model import TransformerLM
+from src.search_agent import search_and_answer
 from src.utils import load_config
 
 
@@ -171,6 +172,7 @@ def generate_answer(
     temperature: float = 0.8,
     use_calculator: bool = True,
     use_topic_guard: bool = True,
+    use_web_search: bool = False,
 ) -> str:
     """入力テキストに対して [BOS] + input_ids を渡して自己回帰生成する。
     学習時と同じ構造（[BOS] input_ids cot answer [EOS]）を踏襲する。
@@ -183,8 +185,17 @@ def generate_answer(
     （src/knowledge_base.py, generate_data.QA_KNOWLEDGE_PAIRSベース）に関連するかを判定し、
     未知のトピックであればモデルを呼び出さずにUNKNOWN_TOPIC_RESPONSEを返す
     （未学習の話題に自信満々で誤った内容を答えてしまう問題への安全弁）。
+
+    use_web_search=True の場合、未知トピックはWikipedia検索で補う（src/search_agent.py）。
+    ネットワーク不通などで検索できなければ、従来の「分かりません」応答にフォールバックする。
+    ガードが無効(use_topic_guard=False)のときは検索も行われない。
     """
     if use_topic_guard and not is_known_topic(text):
+        # 未知トピック: 検索が有効ならWikipediaで補い、失敗時は従来の「分かりません」に戻す
+        if use_web_search:
+            searched = search_and_answer(text)
+            if searched is not None:
+                return searched
         return UNKNOWN_TOPIC_RESPONSE
 
     input_ids = [tok_meta["bos_id"]] + sp.EncodeAsIds(text)
@@ -222,6 +233,8 @@ def _main():
     parser.add_argument("--no_topic_guard", action="store_true",
                         help="既知トピック判定（未知の話題への「分かりません」ガード）を無効化する"
                              "（モデル本来の知識の範囲を確認したい場合）")
+    parser.add_argument("--web_search", action="store_true",
+                        help="未知トピックをWikipedia検索で補う（Kaggleは Settings→Internet をONにする必要あり）")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -236,6 +249,7 @@ def _main():
             temperature=args.temperature,
             use_calculator=not args.no_calculator,
             use_topic_guard=not args.no_topic_guard,
+            use_web_search=args.web_search,
         )
 
     if args.interactive:

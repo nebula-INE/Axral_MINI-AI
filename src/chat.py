@@ -20,6 +20,7 @@ infer.py の --interactive は「質問→回答」の一問一答だけだっ�
   /help            コマンド一覧を表示
   /guard on|off    既知トピックガードのON/OFFを切り替える
   /calc on|off     計算機検算のON/OFFを切り替える
+  /search on|off   未知トピックのWikipedia検索補完のON/OFF（要インターネット接続）
   /topics          学習済み（既知）トピック数を表示
   /save <path>     これまでの対話ログをjsonlとして保存する
   /reset           画面をクリアする代わりに区切り線を表示する（会話状態自体は元々ステートレス）
@@ -43,6 +44,7 @@ _HELP_TEXT = """\
   /help            このヘルプを表示
   /guard on|off    既知トピックガード（未学習の話題への「分かりません」応答）のON/OFF
   /calc  on|off    計算式の自動検算・訂正のON/OFF
+  /search on|off   未知トピックをWikipedia検索で補う（Kaggleは Settings→Internet をONに）
   /topics          既知トピック（学習済みの話題）の登録数を表示
   /save <path>     これまでの対話ログをjsonl形式で保存
   /reset           区切り線を表示（モデル自体は1問1答でステートレスなため、履歴のリセットは不要）
@@ -50,11 +52,11 @@ _HELP_TEXT = """\
 """
 
 
-def _print_banner(checkpoint_path: str, guard_on: bool, calc_on: bool) -> None:
+def _print_banner(checkpoint_path: str, guard_on: bool, calc_on: bool, search_on: bool = False) -> None:
     print("=" * 60)
     print("Axral_MINI-AI 対話モード")
     print(f"checkpoint: {checkpoint_path}")
-    print(f"既知トピックガード: {'ON' if guard_on else 'OFF'} / 計算機検算: {'ON' if calc_on else 'OFF'}")
+    print(f"既知トピックガード: {'ON' if guard_on else 'OFF'} / 計算機検算: {'ON' if calc_on else 'OFF'} / Web検索: {'ON' if search_on else 'OFF'}")
     print("'/help' でコマンド一覧、'/quit' または Ctrl+C で終了")
     print("=" * 60)
 
@@ -79,14 +81,16 @@ def run_chat(
     temperature: float = 0.8,
     use_calculator: bool = True,
     use_topic_guard: bool = True,
+    use_web_search: bool = False,
     log_path: str | None = None,
 ) -> None:
     """対話ループ本体。Ctrl+C / EOF / '/quit' のいずれでも安全に終了する。"""
     guard_on = use_topic_guard
     calc_on = use_calculator
+    search_on = use_web_search
     history: list[dict] = []
 
-    _print_banner(checkpoint_path, guard_on, calc_on)
+    _print_banner(checkpoint_path, guard_on, calc_on, search_on)
 
     while True:
         try:
@@ -123,6 +127,14 @@ def run_chat(
                     calc_on = False
                 print(f"計算機検算: {'ON' if calc_on else 'OFF'}")
                 continue
+            if cmd == "/search":
+                if arg == "on":
+                    search_on = True
+                elif arg == "off":
+                    search_on = False
+                print(f"Web検索: {'ON' if search_on else 'OFF'}"
+                      + ("（ガードがOFFのときは検索されません）" if search_on and not guard_on else ""))
+                continue
             if cmd == "/topics":
                 print(f"既知トピック登録数: {len(KNOWN_TOPIC_PAIRS)}件"
                       "（QA・技術・コード・会話カテゴリ合算。src/knowledge_base.py参照）")
@@ -149,6 +161,7 @@ def run_chat(
             temperature=temperature,
             use_calculator=calc_on,
             use_topic_guard=guard_on,
+            use_web_search=search_on,
         )
         print(f"生成: {answer}")
 
@@ -158,6 +171,7 @@ def run_chat(
             "output": answer,
             "guard_on": guard_on,
             "calc_on": calc_on,
+            "search_on": search_on,
         })
 
     if log_path and history:
@@ -175,6 +189,8 @@ def _main():
                         help="起動時点で計算機検算を無効化する（対話中に /calc on で再度有効化可能）")
     parser.add_argument("--no_topic_guard", action="store_true",
                         help="起動時点で既知トピックガードを無効化する（対話中に /guard on で再度有効化可能）")
+    parser.add_argument("--web_search", action="store_true",
+                        help="起動時点でWeb検索補完を有効化する（対話中に /search on|off で切替可能）")
     parser.add_argument("--log_path", default=None,
                         help="終了時に対話ログをjsonl形式で自動保存するパス（省略可。対話中の /save でも保存可能）")
     args = parser.parse_args()
@@ -191,6 +207,7 @@ def _main():
         temperature=args.temperature,
         use_calculator=not args.no_calculator,
         use_topic_guard=not args.no_topic_guard,
+        use_web_search=args.web_search,
         log_path=args.log_path,
     )
 

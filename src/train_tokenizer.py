@@ -71,6 +71,9 @@ def main():
         bos_id=1,
         eos_id=2,
         unk_id=3,
+        # コーパスが小さく、指定した語彙数に届かない場合にエラーで止まらず、
+        # 作れる範囲の語彙数で学習を終えるようにする（実際の語彙数は学習後に確認すること）。
+        hard_vocab_limit=False,
     )
 
     model_path = f"{model_prefix_path}.model"

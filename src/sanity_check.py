@@ -32,6 +32,10 @@ def extract_answer_for_category(generated: str, category: str) -> str:
     """カテゴリに応じて適切な抽出関数を使う（eval.pyのevaluate()と同じロジック）。"""
     if category == "arithmetic":
         return extract_final_answer(generated)
+    if category == "conversation":
+        # 会話の正解は「こんにちは。お疲れ様です。」のような複数文の返答そのもの。
+        # 最後の1文だけ抜き出すと、正しく返答できていても不一致になってしまう。
+        return generated.strip()
     return extract_final_segment(generated)
 
 

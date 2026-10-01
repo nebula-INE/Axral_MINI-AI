@@ -53,6 +53,12 @@ _ATTR_BOUNDARY_RE = re.compile(r"[はがをにでと]")
 # 既知トピック判定の対象外として、数字を含む入力は常に「既知」扱いにする。
 _HAS_DIGIT_RE = re.compile(r"\d")
 
+# 数字を含んでいても、学習済みの算数テンプレート（割り勘・単価×個数・割合・時速・面積）に
+# 該当する語句が無ければ「未知」として扱う。
+# 以前は数字が1文字でもあれば無条件で通していたため、「150の素因数分解」のような
+# 未学習の算数問題がガードをすり抜け、もっともらしい誤答（幻覚）を生成していた。
+_ARITH_HINT_RE = re.compile(r"人で|円|個|%|時速|km|時間|縦|横|長方形|面積|割り勘")
+
 
 def _clean_attr(attr: str) -> str:
     """属性部分の末尾から、意味を持たない定型語尾を最大3回まで剥がす。"""
@@ -148,8 +154,8 @@ def is_known_topic(text: str) -> bool:
     """入力テキストが学習済みの既知トピック（QA・技術・コード・会話）のいずれかに
     関連するかを判定する。
 
-    数字を含む入力（算数・割合問題など）は判定をスキップし、常にTrueを返す
-    （calculatorによる検算の対象であり、話題知識の範囲外のため）。
+    数字を含み、かつ学習済みの算数テンプレートの語句（円・個・時速・面積など）を含む入力は
+    判定をスキップしてTrueを返す（calculatorによる検算の対象のため）。
 
     それ以外は、(主題entity, 属性attr) のペアごとに、entityが入力テキストに
     含まれ、かつ（attrがある場合は）attrも含まれるかで判定する。
@@ -159,7 +165,7 @@ def is_known_topic(text: str) -> bool:
     if not text.strip():
         return True  # 空文字はガードの対象外（呼び出し側で別途弾かれる想定）
 
-    if _HAS_DIGIT_RE.search(text):
+    if _HAS_DIGIT_RE.search(text) and _ARITH_HINT_RE.search(text):
         return True
 
     for entity, attr in KNOWN_TOPIC_PAIRS:
@@ -169,3 +175,39 @@ def is_known_topic(text: str) -> bool:
             return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# 話題の枝分かれ（関連トピック提案）
+# ---------------------------------------------------------------------------
+_QA_QUESTIONS: list[tuple[str, str, str | None]] = [
+    (q, *_split_entity_attr(q)) for q, _e, _a in QA_KNOWLEDGE_PAIRS
+]
+
+
+def suggest_followups(user_input: str, generated: str, limit: int = 3) -> list[str]:
+    """生成された文章に登場する既知トピックから、次に聞けそうな学習済み質問を提案する。
+
+    モデルは1問1答でステートレスなため、「生成文から話題を広げる」機能は
+    モデル側ではなく知識ベース側で担う。生成文（CoT含む全文）に主題(entity)が
+    現れる学習済みQAを探し、そのまま質問文として提示する
+    （学習済みの質問文なので、選べば確実に答えられる）。
+
+    除外条件:
+      - 主題がユーザーの入力に既に含まれている（同じ話題の繰り返しになるため）
+      - 属性(attr)が生成文に含まれている（今まさに答えた内容のため）
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for question, entity, attr in _QA_QUESTIONS:
+        if len(entity) < 2 or entity not in generated or entity in user_input:
+            continue
+        if attr is not None and attr in generated:
+            continue
+        if question in seen:
+            continue
+        seen.add(question)
+        out.append(question)
+        if len(out) >= limit:
+            break
+    return out

@@ -23,6 +23,7 @@ infer.py の --interactive は「質問→回答」の一問一答だけだっ�
   /search on|off   未知トピックのWikipedia検索補完のON/OFF（要インターネット接続）
   /topics          学習済み（既知）トピック数を表示
   /save <path>     これまでの対話ログをjsonlとして保存する
+  1〜3             回答後に表示される関連トピックを番号で選んで深掘りする
   /reset           画面をクリアする代わりに区切り線を表示する（会話状態自体は元々ステートレス）
   /quit, /exit     終了する（Ctrl+Cでも終了できる）
 """
@@ -36,7 +37,7 @@ from pathlib import Path
 import torch
 
 from src.infer import generate_answer, load_model_and_tokenizer
-from src.knowledge_base import KNOWN_TOPIC_PAIRS
+from src.knowledge_base import KNOWN_TOPIC_PAIRS, UNKNOWN_TOPIC_RESPONSE, suggest_followups
 from src.utils import load_config
 
 _HELP_TEXT = """\
@@ -89,6 +90,7 @@ def run_chat(
     calc_on = use_calculator
     search_on = use_web_search
     history: list[dict] = []
+    pending: list[str] = []  # 直前の回答から提案した関連質問（番号で選択可能）
 
     _print_banner(checkpoint_path, guard_on, calc_on, search_on)
 
@@ -101,6 +103,12 @@ def run_chat(
 
         if not text:
             continue
+
+        # 直前に提示した関連トピックを番号で選んだ場合は、その質問文に置き換える
+        if pending and text.isdigit() and 1 <= int(text) <= len(pending):
+            text = pending[int(text) - 1]
+            print(f"質問（選択）> {text}")
+        pending = []
 
         if text.startswith("/"):
             parts = text.split(maxsplit=1)
@@ -164,6 +172,14 @@ def run_chat(
             use_web_search=search_on,
         )
         print(f"生成: {answer}")
+
+        # 生成文に登場する既知トピックから、話題を枝分かれさせる関連質問を提案する
+        if answer != UNKNOWN_TOPIC_RESPONSE and not answer.startswith("【Web検索"):
+            pending = suggest_followups(text, answer)
+            if pending:
+                print("  関連トピック（番号を入力すると深掘りできます）:")
+                for i, q in enumerate(pending, 1):
+                    print(f"    {i}) {q}")
 
         history.append({
             "timestamp": datetime.now().isoformat(),

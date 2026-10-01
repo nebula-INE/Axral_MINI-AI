@@ -212,6 +212,9 @@ def generate_answer(
     if tok_meta["eos_id"] in new_tokens:
         new_tokens = new_tokens[: new_tokens.index(tok_meta["eos_id"])]
     output = sp.DecodeIds(new_tokens)
+    # 疑問符なしの短い入力（例:「東京」）だと、学習データの「〜？」に続く形で
+    # 先頭に「？」を生成してしまうことがあるため取り除く。
+    output = output.lstrip("?？ 　")
 
     if use_calculator:
         output = apply_calculator_correction(output)

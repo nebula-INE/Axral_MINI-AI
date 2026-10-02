@@ -1,228 +1,188 @@
 """
 run_gate3_pipeline.py
-Gate3実験（CoT比率20/40/60のA/B実験）を、Kaggle Notebookの1セルで
-最初から最後まで通しで実行するためのオールインワンスクリプト。
+テンプレートデータだけでCoT比率ごとの学習を行うパイプライン（データ生成→トークナイザー→前処理→学習→退避）。
 
-これまで繰り返し発生した事故を踏まえた設計:
-  - 冒頭で必ずプロジェクトルートに強制移動する（ディレクトリのズレ対策）
-  - 各ステップの直後に必ず生成物の存在確認を入れ、無ければ即座に停止する
-    （前のコマンドが失敗したまま気づかず次に進む事故の防止）
-  - コマンドの実行順序を1つのスクリプトに固定し、コピペミスや
-    コマンド順の取り違えが起きないようにする
+使い方（Kaggleノートブックのセルで）:
+  # 既定: cot60 の1本だけ（GPU時間を節約。Gate3で最良だった比率）
+  !cd /kaggle/working/Axral_MINI-AI && python -m src.run_gate3_pipeline
 
-Kaggle Notebookでの使い方:
-  1. このファイルの中身を丸ごと1つのセルに貼り付けて実行する
-     （%%writefile 等は不要。そのままコード全体を貼り付けるだけ）
-  2. 何かのステップで失敗したら、そのエラーメッセージを見れば
-     どの段階で止まったか一目で分かる
+  # 比率を指定（複数ならカンマ区切り。従来の3本比較なら cot20,cot40,cot60）
+  !cd /kaggle/working/Axral_MINI-AI && python -m src.run_gate3_pipeline --versions cot40,cot60
+
+  # 学習の手前（前処理まで）で止めて確認する
+  !cd /kaggle/working/Axral_MINI-AI && python -m src.run_gate3_pipeline --skip_train
+
+※ 公開データ（dolly/oasst）を混ぜた新しい学習は、このスクリプトではなく
+   src/run_mix_pipeline.py を使う（語彙16,000・混合データ用）。
+
+設計（これまでの事故を踏まえた方針）:
+  - 冒頭でプロジェクトルートへ強制移動する（ディレクトリのズレ対策）。
+  - 各ステップの直後に生成物の存在確認を入れ、無ければ即停止する。
+  - checkpoint とトークナイザー・configは必ずセットで退避する
+    （片方だけ消えると推論できなくなるため）。
 """
+from __future__ import annotations
+
+import argparse
+import json
 import os
+import shutil
 import subprocess
 import sys
 
-# ============================================================
-# 設定（必要に応じてここだけ書き換える）
-# ============================================================
-PROJECT_ROOT = "/kaggle/working/Axral_MINI-AI"
-NUM_SAMPLES = 30000
-SEED = 42
-VOCAB_SIZE = 4000
+COT_RATIOS = {"cot20": 0.2, "cot40": 0.4, "cot60": 0.6}
 TOKENIZER_PREFIX = "spm_16k_v4"
-COT_VERSIONS = [("v_cot20", 0.2), ("v_cot40", 0.4), ("v_cot60", 0.6)]
-CONFIGS = {
-    "v_cot20": "configs/exp_cot20.yaml",
-    "v_cot40": "configs/exp_cot40.yaml",
-    "v_cot60": "configs/exp_cot60.yaml",
-}
-EXPERIMENT_NAMES = {
-    "v_cot20": "p1_cot20_gate3_7m",
-    "v_cot40": "p1_cot40_gate3_7m",
-    "v_cot60": "p1_cot60_gate3_7m",
-}
 
 
-def run(cmd: list[str], step_name: str) -> None:
-    """コマンドを実行し、失敗したら即座に例外を出して停止する。"""
-    print(f"\n{'=' * 60}\n▶ {step_name}\n{'=' * 60}")
+def exp_name(version: str) -> str:
+    return f"p1_{version}_gate3_7m"
+
+
+def run(cmd: list[str], step: str, cwd: str, fatal: bool = True) -> bool:
+    print(f"\n{'=' * 60}\n▶ {step}\n{'=' * 60}")
     print("$ " + " ".join(cmd))
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+    result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
-        raise RuntimeError(
-            f"❌ ステップ「{step_name}」が失敗しました（終了コード {result.returncode}）。"
-            f"ここで停止します。上のログを確認してください。"
-        )
-    print(f"✓ {step_name} 完了")
+        msg = f"❌ ステップ「{step}」が失敗しました（終了コード {result.returncode}）。"
+        if fatal:
+            raise RuntimeError(msg + "ここで停止します。上のログを確認してください。")
+        print("⚠️ " + msg + "（このステップは失敗しても続行します）")
+        return False
+    print(f"✓ {step} 完了")
+    return True
 
 
-def require_file(relpath: str, step_name: str) -> None:
-    """ファイルが存在しなければ即座に停止する。"""
-    full_path = os.path.join(PROJECT_ROOT, relpath)
-    if not os.path.exists(full_path):
+def require_file(root: str, relpath: str, step: str) -> None:
+    full = os.path.join(root, relpath)
+    if not os.path.exists(full):
         raise FileNotFoundError(
-            f"❌ 「{step_name}」の後に期待されるファイルが見つかりません: {relpath}\n"
+            f"❌ 「{step}」の後に期待されるファイルが見つかりません: {relpath}\n"
             f"このステップが実際には失敗していた可能性があります。上のログを確認してください。"
         )
-    size = os.path.getsize(full_path)
-    print(f"  ✓ 確認: {relpath} ({size:,} bytes)")
+    print(f"  ✓ 確認: {relpath} ({os.path.getsize(full):,} bytes)")
 
 
-# ============================================================
-# 0. プロジェクトルートへ移動（最重要: ここがズレると全部失敗する）
-# ============================================================
-os.chdir(PROJECT_ROOT)
-print(f"現在地: {os.getcwd()}")
-assert os.path.exists("src") and os.path.exists("configs"), (
-    f"❌ プロジェクトルートが見つかりません: {PROJECT_ROOT}\n"
-    f"PROJECT_ROOT変数を実際のパスに書き換えてから再実行してください。"
-)
-print("✓ プロジェクトルート確認OK")
+def parse_versions(text: str) -> list[str]:
+    versions = [v.strip() for v in text.split(",") if v.strip()]
+    unknown = [v for v in versions if v not in COT_RATIOS]
+    if not versions or unknown:
+        raise SystemExit(
+            f"--versions は {', '.join(COT_RATIOS)} をカンマ区切りで指定してください（指定値: {text}）"
+        )
+    return versions
 
-# ============================================================
-# 1. データ生成（cot_ratio 20% / 40% / 60% の3種類）
-# ============================================================
-for version, cot_ratio in COT_VERSIONS:
-    run(
-        [
-            sys.executable, "src/generate_data.py",
-            "--output_dir", "data/",
-            "--num_samples", str(NUM_SAMPLES),
-            "--seed", str(SEED),
-            "--cot_ratio", str(cot_ratio),
-            "--version", version,
-        ],
-        f"データ生成（{version}, cot_ratio={cot_ratio}）",
-    )
-    require_file(f"data/{version}.train.jsonl", f"データ生成（{version}）")
-    require_file(f"data/{version}.val.jsonl", f"データ生成（{version}）")
-    require_file(f"data/{version}_corpus.txt", f"データ生成（{version}）")
 
-# ============================================================
-# 2. トークナイザー学習（3実験で共通利用、v_cot20のコーパスを使う）
-# ============================================================
-tokenizer_model = f"data/{TOKENIZER_PREFIX}.model"
-run(
-    [
-        sys.executable, "src/train_tokenizer.py",
-        "--corpus", "data/v_cot20_corpus.txt",
-        "--output_dir", "data/",
-        "--vocab_size", str(VOCAB_SIZE),
-        "--model_prefix", TOKENIZER_PREFIX,
-        "--character_coverage", "0.9999",
-    ],
-    "トークナイザー学習",
-)
-require_file(tokenizer_model, "トークナイザー学習")
+def backup(root: str, versions: list[str], tok_model: str) -> None:
+    """checkpoint・トークナイザー・configをセットで kaggle_dataset/ に退避し、可能ならアップロードする。"""
+    out_dir = os.path.join(root, "kaggle_dataset")
+    os.makedirs(out_dir, exist_ok=True)
 
-# ============================================================
-# 3. 前処理（3種類とも共通トークナイザーでtoken_ids化）
-# ============================================================
-for version, _ in COT_VERSIONS:
-    run(
-        [
-            sys.executable, "-m", "src.preprocess",
-            "--train_path", f"data/{version}.train.jsonl",
-            "--val_path", f"data/{version}.val.jsonl",
-            "--output_dir", "data/",
-            "--tokenizer_path", tokenizer_model,
-        ],
-        f"前処理（{version}）",
-    )
-    require_file(f"data/{version}_processed.train.jsonl", f"前処理（{version}）")
-    require_file(f"data/{version}_processed.val.jsonl", f"前処理（{version}）")
+    # 既存の仕組みでデータ一式をコピー（失敗しても続行）
+    run([sys.executable, "src/package_kaggle_dataset.py"], "kaggle_dataset/ へのデータコピー", root, fatal=False)
 
-# ============================================================
-# 4. 学習（3種類）
-# ============================================================
-for version, _ in COT_VERSIONS:
-    config_path = CONFIGS[version]
-    run(
-        [sys.executable, "-m", "src.train", "--config", config_path],
-        f"学習（{version}, config={config_path}）",
-    )
-    ckpt_path = f"results/checkpoints/{EXPERIMENT_NAMES[version]}/checkpoint_best.pt"
-    require_file(ckpt_path, f"学習（{version}）")
+    copied = []
+    for v in versions:
+        name = exp_name(v)
+        src = os.path.join(root, f"results/checkpoints/{name}/checkpoint_best.pt")
+        if os.path.exists(src):
+            dst = os.path.join(out_dir, f"checkpoint_best_{name}.pt")
+            shutil.copy(src, dst)
+            copied.append(os.path.basename(dst))
+            print(f"  ✓ {os.path.basename(dst)} ({os.path.getsize(dst):,} bytes)")
+        else:
+            print(f"  ✗ {src} が見つかりません（退避されません）")
 
-print("\n" + "=" * 60)
-print("🎉 Gate3パイプライン、全ステップ完了")
-print("=" * 60)
+    # トークナイザーとconfigもセットで退避（checkpointだけでは推論できない）
+    for rel in (tok_model, tok_model.replace(".model", ".vocab"),
+                *[f"configs/exp_{v}.yaml" for v in versions]):
+        src = os.path.join(root, rel)
+        if os.path.exists(src):
+            shutil.copy(src, os.path.join(out_dir, os.path.basename(rel)))
+            print(f"  ✓ {os.path.basename(rel)}")
 
-# ============================================================
-# 5. checkpointとデータをKaggle Datasetに退避
-# ============================================================
-# /kaggle/working はセッションが切れると消える一時領域のため、
-# セッション終了前に学習成果を必ずKaggle Datasetへアップロードしておく
-# （過去に何度も「セッションが切れてcheckpointごと消えた」事故が起きたため）。
-print("\n" + "=" * 60)
-print("▶ checkpoint・データをKaggle Datasetへ退避")
-print("=" * 60)
-
-KAGGLE_DATASET_DIR = os.path.join(PROJECT_ROOT, "kaggle_dataset")
-os.makedirs(KAGGLE_DATASET_DIR, exist_ok=True)
-
-# 5-1. package_kaggle_dataset.py で data/ 配下の必須ファイル一式をコピーし、
-#      dataset-metadata.json を自動生成する（既存の仕組みを流用）
-try:
-    run(
-        [sys.executable, "src/package_kaggle_dataset.py"],
-        "kaggle_dataset/ へのデータファイルコピー",
-    )
-except RuntimeError as e:
-    print(f"⚠️ {e}")
-    print("⚠️ データファイルのコピーに失敗しましたが、checkpointのコピーは続行します。")
-
-# 5-2. 3実験分のcheckpointを、experiment_nameを含む名前でコピー
-#      （同じ "checkpoint_best.pt" のまま3つコピーすると上書きされるため）
-import shutil
-
-copied_checkpoints = []
-for version, _ in COT_VERSIONS:
-    exp_name = EXPERIMENT_NAMES[version]
-    src_ckpt = os.path.join(PROJECT_ROOT, f"results/checkpoints/{exp_name}/checkpoint_best.pt")
-    if os.path.exists(src_ckpt):
-        dst_name = f"checkpoint_best_{exp_name}.pt"
-        dst_ckpt = os.path.join(KAGGLE_DATASET_DIR, dst_name)
-        shutil.copy(src_ckpt, dst_ckpt)
-        print(f"  ✓ {dst_name} ({os.path.getsize(dst_ckpt):,} bytes)")
-        copied_checkpoints.append(dst_name)
-    else:
-        print(f"  ✗ {src_ckpt} が見つかりません（このcheckpointは退避されません）")
-
-# 5-3. dataset-metadata.json の id がプレースホルダのままでないか確認してからアップロード
-metadata_path = os.path.join(KAGGLE_DATASET_DIR, "dataset-metadata.json")
-should_upload = False
-if os.path.exists(metadata_path):
-    import json as _json
-    with open(metadata_path, encoding="utf-8") as f:
-        meta = _json.load(f)
-    dataset_id = meta.get("id", "")
+    meta_path = os.path.join(out_dir, "dataset-metadata.json")
+    if not (os.path.exists(meta_path) and copied):
+        print("\n⚠️ dataset-metadata.json が無い、またはcheckpointが無いため、自動アップロードはスキップします。")
+        print(f"   {out_dir} の中身を、Notebookの Save Version → Output から Dataset として保存してください。")
+        return
+    with open(meta_path, encoding="utf-8") as f:
+        dataset_id = json.load(f).get("id", "")
     if "YOUR_KAGGLE_USERNAME" in dataset_id:
-        print(f"\n🛑 dataset-metadata.json の id がプレースホルダのままです（{dataset_id}）。")
-        print("   アップロードをスキップします。checkpointは kaggle_dataset/ に")
-        print("   コピー済みなので、id を修正してから手動で以下を実行してください:")
-        print("     kaggle datasets version -p kaggle_dataset/ -m '更新内容'")
-    else:
-        should_upload = True
-        print(f"\n  dataset id: {dataset_id}")
-else:
-    print("\n⚠️ dataset-metadata.json が見つからないため、アップロードをスキップします。")
-
-if should_upload and copied_checkpoints:
+        print(f"\n🛑 dataset-metadata.json の id がプレースホルダのままです（{dataset_id}）。自動アップロードはスキップします。")
+        print(f"   id を修正して手動で: kaggle datasets version -p {out_dir} -m '更新内容'")
+        return
     result = subprocess.run(
-        [
-            "kaggle", "datasets", "version",
-            "-p", KAGGLE_DATASET_DIR,
-            "-m", "Gate3実験（cot20/40/60）のcheckpoint・データを更新",
-        ],
-        cwd=PROJECT_ROOT,
+        ["kaggle", "datasets", "version", "-p", out_dir, "-m", f"{', '.join(versions)} のcheckpoint・トークナイザーを更新"],
+        cwd=root,
     )
-    if result.returncode == 0:
-        print("\n✅ Kaggle Datasetへのアップロード完了")
-    else:
-        print(f"\n⚠️ アップロードに失敗しました（終了コード {result.returncode}）。")
-        print("   ただし学習・checkpointの保存自体は正常に完了しています。")
-        print("   kaggle_dataset/ の中身を確認し、手動で再アップロードしてください。")
-elif not copied_checkpoints:
-    print("\n⚠️ コピーできたcheckpointが1つも無いため、アップロードをスキップしました。")
+    print("\n✅ Kaggle Datasetへのアップロード完了" if result.returncode == 0
+          else f"\n⚠️ アップロードに失敗しました（終了コード {result.returncode}）。{out_dir} から手動で再アップロードしてください。")
 
-print("\n次に sanity_check.py で3つのcheckpointを比較してください。")
-print("（今後セッションが切れても、Kaggle Dataset側からcheckpointを復元できます）")
+
+def main():
+    parser = argparse.ArgumentParser(description="テンプレートデータでのCoT比率別学習パイプライン")
+    parser.add_argument("--project_root", default="/kaggle/working/Axral_MINI-AI")
+    parser.add_argument("--versions", default="cot60", help="例: cot60 / cot40,cot60 / cot20,cot40,cot60")
+    parser.add_argument("--num_samples", type=int, default=30000)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--vocab_size", type=int, default=4000,
+                        help="configs/exp_cot*.yaml の data.vocab_size と一致させること")
+    parser.add_argument("--skip_train", action="store_true", help="学習の手前（前処理まで）で止める")
+    args = parser.parse_args()
+
+    versions = parse_versions(args.versions)
+    root = args.project_root
+    os.chdir(root)
+    assert os.path.exists("src") and os.path.exists("configs"), f"プロジェクトルートが見つかりません: {root}"
+    print(f"現在地: {os.getcwd()}\n対象: {versions}")
+    py = sys.executable
+    tok_model = f"data/{TOKENIZER_PREFIX}.model"
+
+    # 1. データ生成
+    for v in versions:
+        run([py, "src/generate_data.py", "--output_dir", "data/", "--num_samples", str(args.num_samples),
+             "--seed", str(args.seed), "--cot_ratio", str(COT_RATIOS[v]), "--version", f"v_{v}"],
+            f"データ生成（{v}, cot_ratio={COT_RATIOS[v]}）", root)
+        for suffix in (".train.jsonl", ".val.jsonl", "_corpus.txt"):
+            require_file(root, f"data/v_{v}{suffix}", f"データ生成（{v}）")
+
+    # 2. トークナイザー（選んだ先頭バージョンのコーパスで学習し、全バージョンで共有）
+    run([py, "src/train_tokenizer.py", "--corpus", f"data/v_{versions[0]}_corpus.txt",
+         "--output_dir", "data/", "--vocab_size", str(args.vocab_size),
+         "--model_prefix", TOKENIZER_PREFIX, "--character_coverage", "0.9999"],
+        "トークナイザー学習", root)
+    require_file(root, tok_model, "トークナイザー学習")
+
+    # 3. 前処理
+    for v in versions:
+        run([py, "-m", "src.preprocess", "--train_path", f"data/v_{v}.train.jsonl",
+             "--val_path", f"data/v_{v}.val.jsonl", "--output_dir", "data/", "--tokenizer_path", tok_model],
+            f"前処理（{v}）", root)
+        require_file(root, f"data/v_{v}_processed.train.jsonl", f"前処理（{v}）")
+        require_file(root, f"data/v_{v}_processed.val.jsonl", f"前処理（{v}）")
+
+    if args.skip_train:
+        print("\n--skip_train 指定のため、学習の手前で終了します。")
+        return
+
+    # 4. 学習
+    for v in versions:
+        run([py, "-m", "src.train", "--config", f"configs/exp_{v}.yaml"], f"学習（{v}）", root)
+        require_file(root, f"results/checkpoints/{exp_name(v)}/checkpoint_best.pt", f"学習（{v}）")
+
+    # 5. 退避（checkpoint・トークナイザー・configをセットで）
+    print(f"\n{'=' * 60}\n▶ checkpoint・トークナイザー・configをKaggle Datasetへ退避\n{'=' * 60}")
+    backup(root, versions, tok_model)
+
+    # 6. sanity_check（失敗しても続行）
+    for v in versions:
+        run([py, "-m", "src.sanity_check", "--config", f"configs/exp_{v}.yaml",
+             "--checkpoint", f"results/checkpoints/{exp_name(v)}/checkpoint_best.pt",
+             "--val_path", f"data/v_{v}.val.jsonl", "--num_samples", "50"],
+            f"sanity_check（{v}）", root, fatal=False)
+
+    print(f"\n{'=' * 60}\n🎉 パイプライン完了: {versions}\n{'=' * 60}")
+
+
+if __name__ == "__main__":
+    main()

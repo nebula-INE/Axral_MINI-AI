@@ -21,6 +21,7 @@ infer.py の --interactive は「質問→回答」の一問一答だけだっ�
   /guard on|off    既知トピックガードのON/OFFを切り替える
   /calc on|off     計算機検算のON/OFFを切り替える
   /search on|off   未知トピックのWikipedia検索補完のON/OFF（要インターネット接続）
+  /reason on|off   思考過程（まず、〜よって、〜）も表示するかを切り替える
   /topics          学習済み（既知）トピック数を表示
   /save <path>     これまでの対話ログをjsonlとして保存する
   1〜3             回答後に表示される関連トピックを番号で選んで深掘りする
@@ -37,6 +38,7 @@ from pathlib import Path
 import torch
 
 from src.infer import generate_answer, load_model_and_tokenizer
+from src.utils import split_reasoning_answer
 from src.knowledge_base import KNOWN_TOPIC_PAIRS, UNKNOWN_TOPIC_RESPONSE, suggest_followups
 from src.utils import load_config
 
@@ -46,6 +48,7 @@ _HELP_TEXT = """\
   /guard on|off    既知トピックガード（未学習の話題への「分かりません」応答）のON/OFF
   /calc  on|off    計算式の自動検算・訂正のON/OFF
   /search on|off   未知トピックをWikipedia検索で補う（Kaggleは Settings→Internet をONに）
+  /reason on|off   思考過程も表示（既定はOFF＝最終回答だけ）
   /topics          既知トピック（学習済みの話題）の登録数を表示
   /save <path>     これまでの対話ログをjsonl形式で保存
   /reset           区切り線を表示（モデル自体は1問1答でステートレスなため、履歴のリセットは不要）
@@ -89,6 +92,7 @@ def run_chat(
     guard_on = use_topic_guard
     calc_on = use_calculator
     search_on = use_web_search
+    show_reason = False  # 思考過程（CoT）も表示するか
     history: list[dict] = []
     pending: list[str] = []  # 直前の回答から提案した関連質問（番号で選択可能）
 
@@ -143,6 +147,13 @@ def run_chat(
                 print(f"Web検索: {'ON' if search_on else 'OFF'}"
                       + ("（ガードがOFFのときは検索されません）" if search_on and not guard_on else ""))
                 continue
+            if cmd == "/reason":
+                if arg == "on":
+                    show_reason = True
+                elif arg == "off":
+                    show_reason = False
+                print(f"思考過程の表示: {'ON' if show_reason else 'OFF'}")
+                continue
             if cmd == "/topics":
                 print(f"既知トピック登録数: {len(KNOWN_TOPIC_PAIRS)}件"
                       "（QA・技術・コード・会話カテゴリ合算。src/knowledge_base.py参照）")
@@ -171,7 +182,13 @@ def run_chat(
             use_topic_guard=guard_on,
             use_web_search=search_on,
         )
-        print(f"生成: {answer}")
+        if answer == UNKNOWN_TOPIC_RESPONSE or answer.startswith("【Web検索"):
+            print(f"生成: {answer}")
+        else:
+            reasoning, final = split_reasoning_answer(answer)
+            print(f"生成: {final}")
+            if show_reason and reasoning:
+                print(f"  （思考過程: {reasoning}）")
 
         # 生成文に登場する既知トピックから、話題を枝分かれさせる関連質問を提案する
         if answer != UNKNOWN_TOPIC_RESPONSE and not answer.startswith("【Web検索"):

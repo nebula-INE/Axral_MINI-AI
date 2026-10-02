@@ -28,7 +28,7 @@ Axral_MINI-AI 成果物バンドル（{exp}）
 【中身】
   checkpoint_best_{exp}.pt   学習済みモデル
   spm_mix_16k.model/.vocab   トークナイザー（checkpointとセットで必要。語彙が違うと動かない）
-  exp_mix.yaml               学習時のconfig
+  {cfg}   学習時のconfig
 
 【推論のしかた（Kaggleノートブックのセル。パスは展開先に合わせて書き換える）】
   import sys; sys.path.insert(0, "/kaggle/working/Axral_MINI-AI")
@@ -38,7 +38,7 @@ Axral_MINI-AI 成果物バンドル（{exp}）
   from src.utils import load_config
 
   B = "/kaggle/working/bundle"   # このzipを展開した場所
-  config = load_config(B + "/exp_mix.yaml")
+  config = load_config(B + "/{cfg}")
   config["data"]["tokenizer_path"] = B + "/spm_mix_16k.model"   # ← configのパスを展開先に差し替える
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   model, sp, tok_meta = load_model_and_tokenizer(
@@ -73,15 +73,19 @@ def _add_dir(zf: zipfile.ZipFile, root: str, rel: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="成果物をzipにまとめる")
     parser.add_argument("--project_root", default="/kaggle/working/Axral_MINI-AI")
-    parser.add_argument("--exp_name", default="p2_mix_hf_11m")
+    parser.add_argument("--exp_name", default="p3_mix_lr3e4",
+                        help="前回の実験は p2_mix_hf_11m（configは configs/exp_mix.yaml）")
     parser.add_argument("--tokenizer_prefix", default="spm_mix_16k")
-    parser.add_argument("--config", default="configs/exp_mix.yaml")
+    parser.add_argument("--config", default=None,
+                        help="既定は configs/exp_{exp_name}.yaml")
     parser.add_argument("--hf_dir", default="/kaggle/working/hf_import")
     parser.add_argument("--out", default="/kaggle/working/axral_mix_bundle.zip")
     parser.add_argument("--full", action="store_true", help="data/・logs/・src/なども含める")
     args = parser.parse_args()
 
     root, exp = args.project_root, args.exp_name
+    if args.config is None:
+        args.config = f"configs/exp_{exp}.yaml"
     ckpt = os.path.join(root, f"results/checkpoints/{exp}/checkpoint_best.pt")
     if not os.path.exists(ckpt):  # 退避フォルダ側のコピーにフォールバック
         alt = f"/kaggle/working/kaggle_dataset_mix/checkpoint_best_{exp}.pt"
@@ -105,7 +109,7 @@ def main():
         _add(zf, required["トークナイザー(.model)"], f"{args.tokenizer_prefix}.model")
         _add(zf, required["トークナイザー(.vocab)"], f"{args.tokenizer_prefix}.vocab")
         _add(zf, required["config"], os.path.basename(args.config))
-        zf.writestr("README.txt", _README.format(exp=exp))
+        zf.writestr("README.txt", _README.format(exp=exp, cfg=os.path.basename(args.config)))
         print("  + README.txt")
 
         if args.full:

@@ -112,3 +112,17 @@ def load_checkpoint(
     if scheduler is not None and checkpoint.get("scheduler_state_dict"):
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     return checkpoint["step"]
+
+
+def split_reasoning_answer(text: str) -> tuple[str, str]:
+    """生成文を (思考過程, 最終回答) に分ける。
+
+    CoT付きで学習したモデルは「まず、…である。よって、答えは○○である。 ○○」のように、
+    思考過程のあとに半角スペースを挟んで最終回答を出力する。最後の「。 」（句点＋半角スペース）で
+    区切り、後ろ側を最終回答とする。区切りが無い場合（CoTなしの直接回答）は思考過程を空にする。
+    """
+    text = text.strip()
+    if "。 " in text:
+        reasoning, answer = text.rsplit("。 ", 1)
+        return reasoning + "。", answer.strip()
+    return "", text

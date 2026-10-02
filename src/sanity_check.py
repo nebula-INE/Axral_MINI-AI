@@ -35,7 +35,9 @@ def extract_answer_for_category(generated: str, category: str) -> str:
     if category == "conversation":
         # 会話の正解は「こんにちは。お疲れ様です。」のような複数文の返答そのもの。
         # 最後の1文だけ抜き出すと、正しく返答できていても不一致になってしまう。
-        return generated.strip()
+        # CoT付きの出力（「まず、…。 こんにちは。お疲れ様です。」）は、思考過程を除いた最終回答で比べる。
+        from src.utils import split_reasoning_answer
+        return split_reasoning_answer(generated)[1]
     return extract_final_segment(generated)
 
 

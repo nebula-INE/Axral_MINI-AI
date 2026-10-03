@@ -27,7 +27,7 @@ Axral_MINI-AI 成果物バンドル（{exp}）
 
 【中身】
   checkpoint_best_{exp}.pt   学習済みモデル
-  spm_mix_16k.model/.vocab   トークナイザー（checkpointとセットで必要。語彙が違うと動かない）
+  {tok}.model/.vocab   トークナイザー（checkpointとセットで必要。語彙が違うと動かない）
   {cfg}   学習時のconfig
 
 【推論のしかた（Kaggleノートブックのセル。パスは展開先に合わせて書き換える）】
@@ -39,7 +39,7 @@ Axral_MINI-AI 成果物バンドル（{exp}）
 
   B = "/kaggle/working/bundle"   # このzipを展開した場所
   config = load_config(B + "/{cfg}")
-  config["data"]["tokenizer_path"] = B + "/spm_mix_16k.model"   # ← configのパスを展開先に差し替える
+  config["data"]["tokenizer_path"] = B + "/{tok}.model"   # ← configのパスを展開先に差し替える
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   model, sp, tok_meta = load_model_and_tokenizer(
       config, B + "/checkpoint_best_{exp}.pt", device)
@@ -75,7 +75,8 @@ def main():
     parser.add_argument("--project_root", default="/kaggle/working/Axral_MINI-AI")
     parser.add_argument("--exp_name", default="p3_mix_lr3e4",
                         help="前回の実験は p2_mix_hf_11m（configは configs/exp_mix.yaml）")
-    parser.add_argument("--tokenizer_prefix", default="spm_mix_16k")
+    parser.add_argument("--tokenizer_prefix", default=None,
+                        help="既定: data/spm_{exp_name}.model があればそれ、無ければ spm_mix_16k（前回までの名前）")
     parser.add_argument("--config", default=None,
                         help="既定は configs/exp_{exp_name}.yaml")
     parser.add_argument("--hf_dir", default="/kaggle/working/hf_import")
@@ -84,6 +85,8 @@ def main():
     args = parser.parse_args()
 
     root, exp = args.project_root, args.exp_name
+    if args.tokenizer_prefix is None:
+        args.tokenizer_prefix = f"spm_{exp}" if os.path.exists(os.path.join(root, f"data/spm_{exp}.model")) else "spm_mix_16k"
     if args.config is None:
         args.config = f"configs/exp_{exp}.yaml"
     ckpt = os.path.join(root, f"results/checkpoints/{exp}/checkpoint_best.pt")
@@ -109,7 +112,7 @@ def main():
         _add(zf, required["トークナイザー(.model)"], f"{args.tokenizer_prefix}.model")
         _add(zf, required["トークナイザー(.vocab)"], f"{args.tokenizer_prefix}.vocab")
         _add(zf, required["config"], os.path.basename(args.config))
-        zf.writestr("README.txt", _README.format(exp=exp, cfg=os.path.basename(args.config)))
+        zf.writestr("README.txt", _README.format(exp=exp, cfg=os.path.basename(args.config), tok=args.tokenizer_prefix))
         print("  + README.txt")
 
         if args.full:

@@ -14,6 +14,33 @@ from datetime import datetime, timedelta
 # テンプレートベースの合成データ生成（LLMなし、100%再現可能）
 
 
+try:
+    from src.paraphrase_bank import ARITH_PHRASINGS, PARAPHRASES
+except ModuleNotFoundError:  # `python src/generate_data.py` で直接実行した場合（プロジェクトルートがsys.pathに無い）
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from src.paraphrase_bank import ARITH_PHRASINGS, PARAPHRASES
+
+# 言い換えバンクの質問を使う確率（残りは元の文面）。元の文面も一定割合残し、基本形も学習させる。
+PARAPHRASE_PROB = 0.7
+
+
+def vary_question(q: str) -> str:
+    """元の質問文、または言い換えバンクの言い換えをランダムに返す。"""
+    bank = PARAPHRASES.get(q)
+    if bank and random.random() < PARAPHRASE_PROB:
+        return random.choice(bank)
+    return q
+
+
+def _arith_q(kind: str, original_template: str, a: int, b: int) -> str:
+    """算数の質問文。元の文型、または言い換えの書式から選ぶ（数字の順序は元の文型と同じ）。"""
+    if random.random() < 1 - PARAPHRASE_PROB:
+        return original_template.format(a, b)
+    return random.choice(ARITH_PHRASINGS[kind]).format(a, b)
+
+
 def generate_arithmetic_data(count: int) -> list[dict]:
     """数学・論理問題（CoT付き、30%）。
     接続詞（まず/次に/よって）を明示的に入れ、count_reasoning_steps()が
@@ -62,35 +89,35 @@ def generate_arithmetic_data(count: int) -> list[dict]:
             per_person = random.randint(120, 1000)
             amount = people * per_person
             result = amount // people
-            input_text = template_input.format(people, amount)
+            input_text = _arith_q("split", template_input, people, amount)
             cot_text = template_cot.format(amount, people, amount, people, result, result)
             answer = template_ans.format(result)
         elif "パン" in template_input:
             price = random.randint(100, 500)
             qty = random.randint(2, 20)
             result = price * qty
-            input_text = template_input.format(price, qty)
+            input_text = _arith_q("price", template_input, price, qty)
             cot_text = template_cot.format(price, qty, price, qty, result, result)
             answer = template_ans.format(result)
         elif "%" in template_input:
             base = random.randint(100, 10000)
             pct = random.randint(5, 50)
             result = base * pct // 100
-            input_text = template_input.format(base, pct)
+            input_text = _arith_q("percent", template_input, base, pct)
             cot_text = template_cot.format(base, pct, base, pct, result, result)
             answer = template_ans.format(result)
         elif "時速" in template_input:
             speed = random.randint(40, 120)
             hours = random.randint(1, 8)
             result = speed * hours
-            input_text = template_input.format(speed, hours)
+            input_text = _arith_q("speed", template_input, speed, hours)
             cot_text = template_cot.format(speed, hours, speed, hours, result, result)
             answer = template_ans.format(result)
         else:  # 面積
             height = random.randint(2, 50)
             width = random.randint(2, 50)
             result = height * width
-            input_text = template_input.format(height, width)
+            input_text = _arith_q("area", template_input, height, width)
             cot_text = template_cot.format(height, width, height, width, result, result)
             answer = template_ans.format(result)
 
@@ -116,6 +143,8 @@ def generate_arithmetic_data(count: int) -> list[dict]:
 # （knowledge_base.is_known_topic）の両方から単一の情報源として参照される。
 # モジュールレベルに置くことで、学習データと推論時の「既知/未知」判定が
 # 常に一致することを保証する（片方だけ更新してズレる事故を防ぐ）。
+# 注意: 「Pythonでリストから重複を除く方法は？」「SQLのJOINとは？」は技術カテゴリ(TECH_SAMPLES)にも
+# あり、以前はQAにも別の答えで入っていたため、同じ入力に矛盾した答えを教えていた。QA側からは削除した。
 QA_KNOWLEDGE_PAIRS: list[tuple[str, str, str]] = [
         # --- 地理チェーン: 富士山 → 静岡/山梨 → 日本の地理 → 世界の地理 ---
         ("富士山の標高は？", "まず、富士山が日本最高峰の山であることを確認する。次に、標高を調べる。", "3776メートル"),
@@ -155,10 +184,8 @@ QA_KNOWLEDGE_PAIRS: list[tuple[str, str, str]] = [
         ("鉄が錆びる原因は？", "まず、錆びの化学反応を確認する。鉄が空気中の酸素や水分と反応して酸化することで錆が生じる。", "酸素と水分による酸化"),
 
         # --- IT/プログラミングチェーン: Python → データ構造 → SQL → ネットワーク ---
-        ("Pythonでリストから重複を除く方法は？", "まず、集合（set）を使う方法を検討する。集合は同じ値を1つしか持てない性質があるため重複除去に使える。", "set()を使う方法"),
         ("Pythonのリストと辞書の違いは？", "まず、それぞれのデータ構造の特徴を確認する。リストは順序付きの値の並び、辞書はキーと値のペアで管理される。", "リストは値の並び、辞書はキーと値のペア"),
         ("Pythonで例外処理に使う構文は？", "まず、エラー処理の仕組みを確認する。try節でエラーが起きうる処理を囲み、except節で対処する。", "try-except"),
-        ("SQLのJOINとは？", "まず、複数テーブルの結合が必要な場面を確認する。共通のキーを使って別々のテーブルのデータを1つにまとめる操作である。", "複数テーブルを結合する操作"),
         ("SQLでデータを絞り込む句は？", "まず、条件に合うデータだけを取得したい場面を確認する。WHERE句を使うと指定した条件に合う行だけを抽出できる。", "WHERE句"),
         ("IPアドレスとは？", "まず、ネットワーク上の機器の識別方法を確認する。各機器に割り当てられる識別番号であり、住所のような役割を持つ。", "ネットワーク上の機器を識別する番号"),
         ("HTTPとHTTPSの違いは？", "まず、Web通信の仕組みを確認する。HTTPSは通信が暗号化されている点がHTTPと異なり、安全性が高い。", "HTTPSは通信が暗号化されている"),
@@ -201,47 +228,15 @@ def generate_qa_data(count: int) -> list[dict]:
     qa_pairs = QA_KNOWLEDGE_PAIRS
 
     def _vary_question(q: str) -> str:
-        """質問文の意味を変えずに、聞き方（言い回し）だけをランダムに変える。
+        """質問文の聞き方をランダムに変える（言い換えバンクを優先して使う）。
 
-        以前は「？」の有無だけの単純なバリエーションしかなく、
-        「日本の首都はどこですか？」という固定文型にしか対応できなかった。
-        「〜を教えて」「〜について教えて」等、聞き方自体の多様なパターンを
-        混ぜることで、未知の言い回しへの汎化性能向上を狙う
-        （sanity_checkで、固定文型からわずかに外れた質問に弱いことが判明したため）。
+        以前は「{stem}を教えて」「{topic}といえば？」などの機械的な派生形を使っていたが、
+          - 「富士山の標高はを教えて」のような不自然な日本語になる
+          - 「エベレストといえば？」のように、同じ入力に複数の事実（別々の答え）が対応し、
+            矛盾した教師信号になる
+        という問題があったため廃止した。代わりに src/paraphrase_bank.py の自然な言い換えを使う。
         """
-        base = q.rstrip("？")
-        variants = [q]  # 元の文はそのまま候補に残す
-
-        if base.endswith("とは"):
-            # 「ピタゴラスの定理とは」→「〜とはについて教えて」のような
-            # 「とは」の二重表現になるのを防ぐため、「とは」を除去してから繋げる
-            stem = base[:-2]
-            variants.append(f"{stem}とは？")
-            variants.append(f"{stem}について教えて")
-            variants.append(f"{stem}とは何ですか？")
-            variants.append(f"{stem}といえば？")
-        elif base.endswith("ですか"):
-            stem = base[:-3]  # "ですか" を除去
-            variants.append(f"{stem}？")
-            variants.append(f"{stem}を教えて")
-            variants.append(f"{stem}について教えて")
-        else:
-            variants.append(f"{base}？")
-            variants.append(f"{base}を教えて")
-            variants.append(f"{base}について教えて")
-
-        # 「Xといえば？」（Xから連想させる聞き方）は上とは独立に、
-        # 質問文からトピック名（先頭の固有名詞・名詞らしき部分）を大まかに
-        # 抜き出して追加する。トピック抽出は簡易的に「は/が/の/です/？」等の
-        # 助詞・記号の直前までを使う。
-        import re as _re
-        topic_match = _re.match(r"^([^\sはがのとですか？]+)", base)
-        if topic_match:
-            topic = topic_match.group(1)
-            if len(topic) >= 2:  # 短すぎる断片は除外
-                variants.append(f"{topic}といえば？")
-
-        return random.choice(variants)
+        return vary_question(q)
 
     data = []
     for i in range(count):
@@ -291,7 +286,7 @@ def generate_technical_data(count: int) -> list[dict]:
         q, explanation, ans = random.choice(tech_samples)
         data.append({
             "id": f"technical_{datetime.now().strftime('%Y%m%d')}_{i:05d}",
-            "input": q,
+            "input": vary_question(q),
             "cot": explanation,
             "answer": ans,
             "meta": {
@@ -412,7 +407,7 @@ def generate_code_data(count: int) -> list[dict]:
         q, explanation, ans = random.choice(code_samples)
         data.append({
             "id": f"code_{datetime.now().strftime('%Y%m%d')}_{i:05d}",
-            "input": q,
+            "input": vary_question(q),
             "cot": explanation,
             "answer": ans,
             "meta": {
@@ -454,7 +449,7 @@ def generate_conversation_data(count: int) -> list[dict]:
         input_text, response, ans = random.choice(conversations)
         data.append({
             "id": f"conversation_{datetime.now().strftime('%Y%m%d')}_{i:05d}",
-            "input": input_text,
+            "input": vary_question(input_text),
             "cot": response,
             "answer": ans,
             "meta": {

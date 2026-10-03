@@ -11,7 +11,7 @@ Kaggleノートブックのセルで:
 
 学習率・エポック数だけ変えて学習をやり直す場合（データ・トークナイザーは前回のものを再利用）:
   !cd /kaggle/working/Axral_MINI-AI && python -m src.run_mix_pipeline --reuse_data
-  （既定は lr=3e-4, epochs=15, warmup=400, 実験名 p3_mix_lr3e4。--lr/--epochs/--exp_name で変更可）
+  （既定は lr=3e-4, epochs=15, warmup=400, 実験名 p4_mix_para。--lr/--epochs/--exp_name で変更可）
 
 ステップ:
   1. 公開データの取得・変換（/kaggle/working/hf_import に既にあれば再利用）
@@ -111,9 +111,12 @@ def main():
                         help="生成するテンプレートデータの総数（公開データ約1.3万件に合わせた値）")
     parser.add_argument("--vocab_size", type=int, default=16000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--exp_name", default="p3_mix_lr3e4",
+    parser.add_argument("--exp_name", default="p4_mix_para",
                         help="実験名（checkpointの保存先）。前回(p2_mix_hf_11m)と別名にすること。"
                              "同名だと resume_from_checkpoint で前回の続きから始まってしまう")
+    parser.add_argument("--tokenizer_prefix", default=None,
+                        help="トークナイザーのファイル名（data/{prefix}.model）。既定は実験ごとに別名（spm_{exp_name}）。"
+                             "同じ名前で作り直すと、以前のcheckpointが使えなくなるため。--reuse_data 時の既定は前回の spm_mix_16k")
     parser.add_argument("--lr", type=float, default=3e-4, help="最大学習率（前回は1e-4）")
     parser.add_argument("--epochs", type=int, default=15, help="エポック数（前回は10）")
     parser.add_argument("--warmup_steps", type=int, default=400, help="ウォームアップ（前回は1000）")
@@ -129,7 +132,7 @@ def main():
     py = sys.executable
 
     tpl_version, mix_version = "v_tpl60", "v_mix"
-    tok_prefix = "spm_mix_16k"
+    tok_prefix = args.tokenizer_prefix or ("spm_mix_16k" if args.reuse_data else f"spm_{args.exp_name}")
     tok_model = f"data/{tok_prefix}.model"
 
     if not args.reuse_data:
@@ -142,6 +145,8 @@ def main():
                 "公開データの取得・変換（要インターネット）", root)
         require_file(root, hf_train, "公開データ")
         require_file(root, os.path.join(args.hf_dir, "hf_corpus.txt"), "公開データ")
+
+        run([py, "-m", "src.paraphrase_bank", "--check"], "言い換えバンクの検査（物差しとの重複チェック）", root)
 
         # 2. テンプレートデータ
         run([py, "src/generate_data.py", "--output_dir", "data/",
@@ -242,9 +247,10 @@ def main():
 
     # 10. 物差し（学習で見ていない言い回しへの対応力。前回の結果があれば差分も表示）
     yardstick_cmd = [py, "-m", "src.eval_yardstick", "--config", config_path, "--checkpoint", ckpt]
-    prev = "logs/yardstick_p2_mix_hf_11m.json"
-    if os.path.exists(os.path.join(root, prev)):
-        yardstick_cmd += ["--baseline", prev]
+    for prev in ("logs/yardstick_p3_mix_lr3e4.json", "logs/yardstick_p2_mix_hf_11m.json"):
+        if os.path.exists(os.path.join(root, prev)):
+            yardstick_cmd += ["--baseline", prev]
+            break
     run(yardstick_cmd, "物差し yardstick_v1", root, fatal=False)
 
     print("\n" + "=" * 60)

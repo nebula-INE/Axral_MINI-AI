@@ -117,18 +117,21 @@ def print_report(summary: dict) -> None:
     print("\n" + "=" * 64)
     print("【物差し yardstick_v1】学習で見ていない言い回しへの対応力")
     print("=" * 64)
-    print(f"総合正答率（実際の利用で見える結果）: {_pct(o['overall_e2e'])}  （全{o['n']}問）")
-    if "model_acc" in o:
+    if "e2e_acc" in o:
+        print(f"【見出し】答えられるはずの問題の総合正答率（ガードを通り、かつ正解）: {_pct(o['e2e_acc'])}"
+              f"  （{o['n_inscope']}問）")
         print(f"  モデル正答率（ガード無し）        : {_pct(o['model_acc'])}  ← モデル自身の汎化力")
         print(f"  ガード通過率                      : {_pct(o['guard_pass'])}  ← 低いと、答えられる問題まで拒否している")
     if "refusal_rate" in o:
-        print(f"  範囲外の拒否率                    : {_pct(o['refusal_rate'])}  ← 高いほどガードが正しく働いている")
+        print(f"範囲外の拒否率（別指標）            : {_pct(o['refusal_rate'])}  ← 高いほどガードが正しく働いている"
+              f"（{o['n_refuse']}問）")
+    print("※ 範囲外の拒否を正解に含めると、全部「分かりません」でも点が取れてしまうため、見出しからは除いています。")
     for title, key in (("カテゴリ別", "by_category"), ("種類別", "by_type")):
         print(f"\n--- {title} ---")
         print(f"{'':14}{'問数':>5}{'モデル':>9}{'ガード':>9}{'総合':>9}{'拒否率':>9}")
         for name, g in summary[key].items():
             print(f"{name:14}{g['n']:>5}{_pct(g.get('model_acc')):>9}{_pct(g.get('guard_pass')):>9}"
-                  f"{_pct(g['overall_e2e']):>9}{_pct(g.get('refusal_rate')):>9}")
+                  f"{_pct(g.get('e2e_acc')):>9}{_pct(g.get('refusal_rate')):>9}")
 
 
 def print_failures(results: list[dict], limit: int) -> None:
@@ -153,7 +156,7 @@ def print_delta(base: dict, cur: dict) -> None:
         rows.append((name, base["by_category"].get(name, {}), g))
     for name, b, c in rows:
         print(f"{name:14}{d(c.get('model_acc'), b.get('model_acc')):>9}{d(c.get('guard_pass'), b.get('guard_pass')):>9}"
-              f"{d(c.get('overall_e2e'), b.get('overall_e2e')):>9}")
+              f"{d(c.get('e2e_acc'), b.get('e2e_acc')):>9}")
 
 
 def main():

@@ -19,7 +19,7 @@ import re
 
 import torch
 
-from src.knowledge_base import UNKNOWN_TOPIC_RESPONSE, is_known_topic
+from src.knowledge_base import UNKNOWN_TOPIC_RESPONSE, is_known_topic, is_refusal
 from src.model import TransformerLM
 from src.search_agent import search_and_answer
 from src.utils import load_config
@@ -186,17 +186,22 @@ def generate_answer(
     未知のトピックであればモデルを呼び出さずにUNKNOWN_TOPIC_RESPONSEを返す
     （未学習の話題に自信満々で誤った内容を答えてしまう問題への安全弁）。
 
+    モデル自身が拒否の応答（学習していないので答えられない）を出した場合も、同じ扱いにする。
+
     use_web_search=True の場合、未知トピックはWikipedia検索で補う（src/search_agent.py）。
     ネットワーク不通などで検索できなければ、従来の「分かりません」応答にフォールバックする。
     ガードが無効(use_topic_guard=False)のときは検索も行われない。
     """
-    if use_topic_guard and not is_known_topic(text):
+    def _unknown() -> str:
         # 未知トピック: 検索が有効ならWikipediaで補い、失敗時は従来の「分かりません」に戻す
         if use_web_search:
             searched = search_and_answer(text)
             if searched is not None:
                 return searched
         return UNKNOWN_TOPIC_RESPONSE
+
+    if use_topic_guard and not is_known_topic(text):
+        return _unknown()
 
     input_ids = [tok_meta["bos_id"]] + sp.EncodeAsIds(text)
     input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
@@ -215,6 +220,11 @@ def generate_answer(
     # 疑問符なしの短い入力（例:「東京」）だと、学習データの「〜？」に続く形で
     # 先頭に「？」を生成してしまうことがあるため取り除く。
     output = output.lstrip("?？ 　")
+
+    # 拒否学習を受けたモデルが自分で「分かりません」と答えた場合も、ガードが拒否したときと同じ扱いにする
+    # （ガード無効時は、モデルの素の出力をそのまま返す。物差しがモデル自身の拒否を測るため）。
+    if use_topic_guard and is_refusal(output):
+        return _unknown()
 
     if use_calculator:
         output = apply_calculator_correction(output)

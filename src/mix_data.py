@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--hf_dir", default="/kaggle/working/hf_import")
     parser.add_argument("--out_version", default="v_mix")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--refusal_version", default=None,
+                        help="拒否学習データ（refusal_data.py の --version。例: v_refusal）。指定すると学習・検証・コーパスに加える")
     parser.add_argument("--no_balance", action="store_true",
                         help="テンプレートを間引かず、全件使う")
     args = parser.parse_args()
@@ -71,8 +73,20 @@ def main():
     if not args.no_balance and len(tpl_val) > len(hf_val):
         tpl_val = rng.sample(tpl_val, len(hf_val))
 
-    train = tpl_train + hf_train
-    val = tpl_val + hf_val
+    # 拒否学習データ（「分からない」を答えるデータ）。間引かず、そのまま加える。
+    ref_train, ref_val = [], []
+    if args.refusal_version:
+        ref_train = read_jsonl(data_dir / f"{args.refusal_version}.train.jsonl")
+        ref_val = read_jsonl(data_dir / f"{args.refusal_version}.val.jsonl")
+        # 公開データの学習用の質問と同じ文面を拒否にすると矛盾するため、取り除く
+        hf_inputs = {it["input"] for it in hf_train}
+        before = len(ref_train)
+        ref_train = [it for it in ref_train if it["input"] not in hf_inputs]
+        if len(ref_train) != before:
+            print(f"  ※ 公開データと同じ質問の拒否データ{before - len(ref_train)}件を除外しました")
+
+    train = tpl_train + hf_train + ref_train
+    val = tpl_val + hf_val + ref_val
     rng.shuffle(train)
     rng.shuffle(val)
 
@@ -83,7 +97,10 @@ def main():
     # トークナイザー学習用コーパス: テンプレート側（CoTの文章を含む）＋公開データ側
     corpus_path = data_dir / f"{out_version}_corpus.txt"
     with corpus_path.open("w", encoding="utf-8") as fout:
-        for src in (data_dir / f"{tv}_corpus.txt", hf_dir / "hf_corpus.txt"):
+        sources = [data_dir / f"{tv}_corpus.txt", hf_dir / "hf_corpus.txt"]
+        if args.refusal_version:
+            sources.append(data_dir / f"{args.refusal_version}_corpus.txt")
+        for src in sources:
             with src.open(encoding="utf-8") as fin:
                 for line in fin:
                     fout.write(line)
@@ -91,6 +108,8 @@ def main():
     print(f"✓ 混合データを保存しました（{out_version}）")
     print(f"  train: テンプレート{len(tpl_train)}件 + 公開データ{len(hf_train)}件 = {len(train)}件")
     print(f"  val  : テンプレート{len(tpl_val)}件 + 公開データ{len(hf_val)}件 = {len(val)}件")
+    if args.refusal_version:
+        print(f"  拒否学習データ: train {len(ref_train)}件 / val {len(ref_val)}件を含む")
     print(f"  trainのソース内訳: {_share(train, 'source')}")
     print(f"  trainのカテゴリ内訳: {_share(train, 'category')}")
     print(f"  コーパス: {corpus_path}")

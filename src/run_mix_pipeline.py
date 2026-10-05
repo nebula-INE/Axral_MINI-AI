@@ -11,7 +11,7 @@ Kaggleノートブックのセルで:
 
 学習率・エポック数だけ変えて学習をやり直す場合（データ・トークナイザーは前回のものを再利用）:
   !cd /kaggle/working/Axral_MINI-AI && python -m src.run_mix_pipeline --reuse_data
-  （既定は lr=3e-4, epochs=15, warmup=400, 実験名 p4_mix_para。--lr/--epochs/--exp_name で変更可）
+  （既定は lr=3e-4, epochs=15, warmup=400, 実験名 p5_refusal。--lr/--epochs/--exp_name で変更可）
 
 ステップ:
   1. 公開データの取得・変換（/kaggle/working/hf_import に既にあれば再利用）
@@ -111,12 +111,14 @@ def main():
                         help="生成するテンプレートデータの総数（公開データ約1.3万件に合わせた値）")
     parser.add_argument("--vocab_size", type=int, default=16000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--exp_name", default="p4_mix_para",
+    parser.add_argument("--exp_name", default="p5_refusal",
                         help="実験名（checkpointの保存先）。前回(p2_mix_hf_11m)と別名にすること。"
                              "同名だと resume_from_checkpoint で前回の続きから始まってしまう")
     parser.add_argument("--tokenizer_prefix", default=None,
                         help="トークナイザーのファイル名（data/{prefix}.model）。既定は実験ごとに別名（spm_{exp_name}）。"
                              "同じ名前で作り直すと、以前のcheckpointが使えなくなるため。--reuse_data 時の既定は前回の spm_mix_16k")
+    parser.add_argument("--no_refusal", action="store_true",
+                        help="拒否学習データ（「分からない」を答えるデータ）を混ぜない（p4と同じ構成に戻す）")
     parser.add_argument("--lr", type=float, default=3e-4, help="最大学習率（前回は1e-4）")
     parser.add_argument("--epochs", type=int, default=15, help="エポック数（前回は10）")
     parser.add_argument("--warmup_steps", type=int, default=400, help="ウォームアップ（前回は1000）")
@@ -156,9 +158,17 @@ def main():
         for suffix in (".train.jsonl", ".val.jsonl", "_corpus.txt"):
             require_file(root, f"data/{tpl_version}{suffix}", "テンプレートデータ生成")
 
+        # 2.5 拒否学習データ（既知の話題×未知の属性、未学習の話題 → 「分かりません」）
+        if not args.no_refusal:
+            run([py, "-m", "src.refusal_data", "--output_dir", "data/", "--version", "v_refusal",
+                 "--seed", str(args.seed)], "拒否学習データの生成（物差し・調整用との重複検査つき）", root)
+            for suffix in (".train.jsonl", ".val.jsonl", "_corpus.txt"):
+                require_file(root, f"data/v_refusal{suffix}", "拒否学習データの生成")
+
         # 3. 混合
         run([py, "-m", "src.mix_data", "--template_version", tpl_version,
-             "--hf_dir", args.hf_dir, "--out_version", mix_version, "--seed", str(args.seed)],
+             "--hf_dir", args.hf_dir, "--out_version", mix_version, "--seed", str(args.seed)]
+             + ([] if args.no_refusal else ["--refusal_version", "v_refusal"]),
             "テンプレート＋公開データの混合", root)
         for suffix in (".train.jsonl", ".val.jsonl", "_corpus.txt"):
             require_file(root, f"data/{mix_version}{suffix}", "混合")

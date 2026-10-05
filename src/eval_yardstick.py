@@ -30,7 +30,7 @@ import unicodedata
 from pathlib import Path
 from typing import Callable
 
-from src.knowledge_base import is_known_topic
+from src.knowledge_base import is_known_topic, is_refusal
 
 DEFAULT_YARDSTICK = "eval_sets/yardstick_v1.jsonl"
 _STRIP_CHARS = "、。，,．・（）()「」『』“”\"'！!？?：:；;~〜 \u3000\t\n"
@@ -71,14 +71,15 @@ def evaluate_items(items: list[dict], generate: Callable[[str], str], progress: 
         raw = generate(it["input"])
         _reasoning, final = split_reasoning_answer(raw)
         guard_pass = is_known_topic(it["input"])
+        model_refused = is_refusal(raw)  # モデル自身が「学習していないので答えられない」と答えたか（拒否学習の効果）
         if it["behavior"] == "refuse":
             model_correct = None
-            e2e = not guard_pass
+            e2e = (not guard_pass) or model_refused  # ガード、またはモデル自身が断れれば、正しい挙動
         else:
             model_correct = matches(final, it["expected_any"])
             e2e = bool(model_correct and guard_pass)
         results.append({**it, "raw": raw, "final": final, "guard_pass": guard_pass,
-                        "model_correct": model_correct, "e2e_correct": e2e})
+                        "model_refused": model_refused, "model_correct": model_correct, "e2e_correct": e2e})
         if progress and i % 20 == 0:
             print(f"  {i}/{len(items)} 問 採点済み...")
     return results
@@ -93,9 +94,12 @@ def _group_stats(rows: list[dict]) -> dict:
         out["model_acc"] = sum(bool(r["model_correct"]) for r in inscope) / len(inscope)
         out["guard_pass"] = sum(r["guard_pass"] for r in inscope) / len(inscope)
         out["e2e_acc"] = sum(r["e2e_correct"] for r in inscope) / len(inscope)
+        out["false_refusal"] = sum(bool(r.get("model_refused")) for r in inscope) / len(inscope)
     if refuse:
         out["n_refuse"] = len(refuse)
         out["refusal_rate"] = sum(r["e2e_correct"] for r in refuse) / len(refuse)
+        out["guard_refusal"] = sum(not r["guard_pass"] for r in refuse) / len(refuse)
+        out["model_refusal"] = sum(bool(r.get("model_refused")) for r in refuse) / len(refuse)
     out["overall_e2e"] = sum(r["e2e_correct"] for r in rows) / len(rows)
     return out
 
@@ -122,9 +126,12 @@ def print_report(summary: dict) -> None:
               f"  （{o['n_inscope']}問）")
         print(f"  モデル正答率（ガード無し）        : {_pct(o['model_acc'])}  ← モデル自身の汎化力")
         print(f"  ガード通過率                      : {_pct(o['guard_pass'])}  ← 低いと、答えられる問題まで拒否している")
+        if "false_refusal" in o:
+            print(f"  過剰な拒否（答えられる問題をモデルが断った）: {_pct(o['false_refusal'])}  ← 低いほどよい")
     if "refusal_rate" in o:
-        print(f"範囲外の拒否率（別指標）            : {_pct(o['refusal_rate'])}  ← 高いほどガードが正しく働いている"
-              f"（{o['n_refuse']}問）")
+        print(f"範囲外の拒否率（別指標、ガードかモデルのどちらかが断れた割合）: {_pct(o['refusal_rate'])}（{o['n_refuse']}問）")
+        if "model_refusal" in o:
+            print(f"  うち ガードだけ: {_pct(o['guard_refusal'])} ／ モデル自身（拒否学習の効果）: {_pct(o['model_refusal'])}")
     print("※ 範囲外の拒否を正解に含めると、全部「分かりません」でも点が取れてしまうため、見出しからは除いています。")
     for title, key in (("カテゴリ別", "by_category"), ("種類別", "by_type")):
         print(f"\n--- {title} ---")

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 
+from src.paraphrase_bank import PARAPHRASES
 from src.generate_data import (
     CODE_SAMPLES,
     CONVERSATION_SAMPLES,
@@ -150,7 +151,16 @@ UNKNOWN_TOPIC_RESPONSE = (
 )
 
 
-def is_known_topic(text: str) -> bool:
+def is_refusal(text: str) -> bool:
+    """モデルの出力が、「学習していないので答えられない」という拒否の応答か。
+
+    拒否学習（refusal_data.py）を受けたモデルは、UNKNOWN_TOPIC_RESPONSE の定型文を出力する。
+    言い回しが多少崩れても拾えるよう、定型文の特徴的な語の組で判定する。
+    """
+    return "学習していない" in text and "お答えできません" in text
+
+
+def is_known_topic_strict(text: str) -> bool:  # 旧方式（文字列の一致）。比較用に残す
     """入力テキストが学習済みの既知トピック（QA・技術・コード・会話）のいずれかに
     関連するかを判定する。
 
@@ -211,3 +221,101 @@ def suggest_followups(user_input: str, generated: str, limit: int = 3) -> list[s
         if len(out) >= limit:
             break
     return out
+
+
+# ---------------------------------------------------------------------------
+# ガード v2: 「事実ごとのカバー率」による判定
+# ---------------------------------------------------------------------------
+# 旧方式（上の is_known_topic_strict）は、学習した文面との文字列一致だったため、言い換えに弱く、
+# 答えられる問題の約6割を拒否していた（物差し yardstick_v1 の実測）。一方、「同じ話題で属性だけ未知」
+# （例:「富士山の面積は？」）を、トピック名の一致だけで通してしまう問題もあった。
+#
+# 新方式: 学習済みの質問（元の文面＋言い換えバンク）を「事実」ごとにまとめ、その事実の言い回し全体に、
+# 入力の文字2-gram・1-gramがどれだけ含まれるかを、IDF（珍しい語ほど重い）で重み付けして測る。
+#   カバー率 = Σ(その事実の言い回しに含まれる入力の語の重み) / (Σ(入力の語の重み) + 事前重み)
+# 「面積」のように、その事実のどの言い回しにも無い語が入力にあれば、カバー率が下がり拒否される。
+# 事前重みは、「日本」のような短い入力が、少ない語の一致だけで高得点になるのを防ぐ。
+#
+# 閾値(GUARD_THRESHOLD)は、物差し(採点専用)ではなく、調整用データ（言い換えバンクを1件ずつ外した
+# 「未知の言い換え」と、手書きの範囲外問題）から src/tune_guard.py で決めた。
+GUARD_THRESHOLD = 0.65
+_GUARD_PRIOR = 8.0  # python -m src.tune_guard の推奨値（調整用データで、誤受け入れを抑えつつ受け入れ率が最大の組）
+_GUARD_STRIP = "、。，,．・（）()「」『』“”\"'！!？?：:；;~〜 \u3000\t\n"
+
+
+def _gnorm(s: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKC", s).lower()
+    return "".join(ch for ch in s if ch not in _GUARD_STRIP)
+
+
+def _ggrams(s: str) -> set[str]:
+    return {s[i:i + k] for k in (1, 2) for i in range(len(s) - k + 1)}
+
+
+def guard_entries() -> list[tuple[str, int]]:
+    """(質問文, 事実ID) の一覧。元の質問と、その言い換えを、同じ事実IDにまとめる。"""
+    originals = list(dict.fromkeys(
+        q for q, _e, _a in (*QA_KNOWLEDGE_PAIRS, *TECH_SAMPLES, *CODE_SAMPLES, *CONVERSATION_SAMPLES)))
+    entries = []
+    for fid, q in enumerate(originals):
+        entries.append((q, fid))
+        entries += [(p, fid) for p in PARAPHRASES.get(q, [])]
+    return entries
+
+
+def build_guard_index(entries: list[tuple[str, int]]) -> dict:
+    import math
+    from collections import Counter, defaultdict
+    by_fact: dict[int, set[str]] = defaultdict(set)
+    exact: dict[str, int] = {}
+    for q, fid in entries:
+        n = _gnorm(q)
+        by_fact[fid] |= _ggrams(n)
+        exact[n] = fid
+    df = Counter(g for gs in by_fact.values() for g in gs)
+    n_facts = len(by_fact)
+    idf = {g: math.log((n_facts + 1) / (c + 1)) + 1 for g, c in df.items()}
+    return {"by_fact": dict(by_fact), "idf": idf, "n_facts": n_facts, "exact": exact}
+
+
+_GUARD_INDEX: dict | None = None
+
+
+def guard_score(text: str, index: dict | None = None, prior: float | None = None) -> tuple[float, int | None]:
+    """入力の「既知らしさ」（0〜1）と、最も近い事実のIDを返す。（index/priorは調整用の差し替え口）"""
+    prior = _GUARD_PRIOR if prior is None else prior
+    import math
+    global _GUARD_INDEX
+    if index is None:
+        if _GUARD_INDEX is None:
+            _GUARD_INDEX = build_guard_index(guard_entries())
+        index = _GUARD_INDEX
+    n = _gnorm(text)
+    if n in index["exact"]:
+        return 1.0, index["exact"][n]  # 学習済みの文面そのもの
+    idf, unseen = index["idf"], math.log(index["n_facts"] + 1) + 1  # 未知の語は最大の重み
+    grams = _ggrams(n)
+    total = sum(idf.get(g, unseen) for g in grams)
+    best, best_fid = 0.0, None
+    for fid, gs in index["by_fact"].items():
+        covered = sum(idf[g] for g in grams if g in gs)
+        score = covered / (total + prior)
+        if score > best:
+            best, best_fid = score, fid
+    return best, best_fid
+
+
+def is_known_topic(text: str) -> bool:
+    """入力が、学習済みの話題か（モデルに答えさせてよいか）を判定する。
+
+    - 空文字は対象外（True）。
+    - 数字を含み、学習済みの算数テンプレートの語句（円・個・時速・面積など）を含む入力は、
+      計算機の検算の対象なので True（旧方式から変更なし）。
+    - それ以外は、事実ごとのカバー率（guard_score）が GUARD_THRESHOLD 以上なら True。
+    """
+    if not text.strip():
+        return True
+    if _HAS_DIGIT_RE.search(text) and _ARITH_HINT_RE.search(text):
+        return True
+    return guard_score(text)[0] >= GUARD_THRESHOLD

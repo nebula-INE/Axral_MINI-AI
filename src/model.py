@@ -31,6 +31,7 @@ class CausalSelfAttention(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model)
         self.attn_dropout = nn.Dropout(attn_dropout)
         self.resid_dropout = nn.Dropout(resid_dropout)
+        self.use_sdpa = hasattr(F, "scaled_dot_product_attention")
 
         # 因果マスク（未来のトークンを見せない）
         mask = torch.tril(torch.ones(max_seq_length, max_seq_length)).view(1, 1, max_seq_length, max_seq_length)
@@ -45,12 +46,21 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
 
-        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        att = att.masked_fill(self.causal_mask[:, :, :T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-
-        y = att @ v  # (B, nh, T, hd)
+        if self.use_sdpa:
+            # PyTorch標準の高速な注意計算（メモリ効率版/Flash版が自動で選ばれる）。
+            # 数式は下の手書き版と同じ（因果マスク＋softmax＋dropout）。重みの名前・形も変わらないので、
+            # 既存のcheckpointはそのまま読める。
+            y = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=None,
+                dropout_p=self.attn_dropout.p if self.training else 0.0,
+                is_causal=True,
+            )
+        else:
+            att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            att = att.masked_fill(self.causal_mask[:, :, :T, :T] == 0, float("-inf"))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v  # (B, nh, T, hd)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.out_proj(y))
         return y

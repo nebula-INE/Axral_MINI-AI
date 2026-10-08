@@ -119,6 +119,10 @@ def main():
                              "同じ名前で作り直すと、以前のcheckpointが使えなくなるため。--reuse_data 時の既定は前回の spm_mix_16k")
     parser.add_argument("--no_refusal", action="store_true",
                         help="拒否学習データ（「分からない」を答えるデータ）を混ぜない（p4と同じ構成に戻す）")
+    parser.add_argument("--arith_style", choices=["oneshot", "stepwise"], default="oneshot",
+                        help="算数CoTの形式。stepwise=位ごとに分解した手順つき（p6 の施策）")
+    parser.add_argument("--arith_ranges", choices=["default", "wide"], default="default",
+                        help="stepwise時の数字の範囲（wide=広い範囲）")
     parser.add_argument("--lr", type=float, default=3e-4, help="最大学習率（前回は1e-4）")
     parser.add_argument("--epochs", type=int, default=15, help="エポック数（前回は10）")
     parser.add_argument("--warmup_steps", type=int, default=400, help="ウォームアップ（前回は1000）")
@@ -153,7 +157,8 @@ def main():
         # 2. テンプレートデータ
         run([py, "src/generate_data.py", "--output_dir", "data/",
              "--num_samples", str(args.template_samples), "--seed", str(args.seed),
-             "--cot_ratio", "0.6", "--version", tpl_version],
+             "--cot_ratio", "0.6", "--version", tpl_version,
+             "--arith_style", args.arith_style, "--arith_ranges", args.arith_ranges],
             "テンプレートデータ生成（cot_ratio=0.6）", root)
         for suffix in (".train.jsonl", ".val.jsonl", "_corpus.txt"):
             require_file(root, f"data/{tpl_version}{suffix}", "テンプレートデータ生成")

@@ -157,7 +157,8 @@ def load_model_and_tokenizer(config: dict, checkpoint_path: str, device: torch.d
     model.eval()
     print(f"✓ checkpoint 読み込み完了: {checkpoint_path} (step={checkpoint.get('step', '?')})")
 
-    return model, sp, tok_meta
+    from src.code_text import CodecTokenizer
+    return model, CodecTokenizer(sp), tok_meta  # 改行記号入りのトークナイザーなら自動で改行・インデントを復元する
 
 
 @torch.no_grad()

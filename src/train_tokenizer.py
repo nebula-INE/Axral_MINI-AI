@@ -41,6 +41,12 @@ def main():
                              "モデルが数値の組み合わせを丸暗記するだけになり計算を学習しにくくなる"
                              "（実データのsanity_checkで発覚: 45×4=240等、入力の数字は正しく"
                              "コピーできても掛け算自体を間違えるケースが頻発した）。")
+    parser.add_argument("--code_aware", action="store_true",
+                        help="コード対応モード。改行(<nl>)とインデント(<i>)を専用記号として登録し、空白の整理を無効にする。"
+                             "コーパスは src/code_text.encode_text で変換済みであること（build_tokenizer_corpus が作る）。")
+    parser.add_argument("--input_sentence_size", type=int, default=0,
+                        help="学習に使う行数の上限（0なら全部）。大きなコーパスのときは200万程度にして、"
+                             "ランダムに抜き出す（学習時間とメモリを抑える）。")
     args = parser.parse_args()
 
     if not os.path.exists(args.corpus):
@@ -60,6 +66,14 @@ def main():
     print(f"  model_type: {args.model_type}")
     print(f"  split_digits: {args.split_digits}")
 
+    extra = {}
+    if args.code_aware:
+        from src.code_text import USER_SYMBOLS
+        extra.update(user_defined_symbols=USER_SYMBOLS, remove_extra_whitespaces=False)
+        print(f"  code_aware: 改行・インデント記号 {USER_SYMBOLS} を登録（空白の整理は無効）")
+    if args.input_sentence_size:
+        extra.update(input_sentence_size=args.input_sentence_size, shuffle_input_sentence=True)
+
     spm.SentencePieceTrainer.Train(
         input=args.corpus,
         model_prefix=model_prefix_path,
@@ -74,6 +88,7 @@ def main():
         # コーパスが小さく、指定した語彙数に届かない場合にエラーで止まらず、
         # 作れる範囲の語彙数で学習を終えるようにする（実際の語彙数は学習後に確認すること）。
         hard_vocab_limit=False,
+        **extra,
     )
 
     model_path = f"{model_prefix_path}.model"
@@ -97,6 +112,14 @@ def main():
     normalized_input = unicodedata.normalize("NFKC", test_text).replace(" ", "")
     normalized_decoded = unicodedata.normalize("NFKC", decoded).replace(" ", "")
     is_match = normalized_decoded == normalized_input
+
+    if args.code_aware:
+        from src.code_text import CodecTokenizer
+        codec = CodecTokenizer(sp)
+        sample = "def add(a, b):\n    return a + b\n"
+        back = codec.decode(codec.encode(sample))
+        print(f"\n【コードの往復確認】{'✓ 一致' if back.strip() == sample.strip() else '✗ 不一致'}")
+        print(repr(back))
 
     print(f"\n【動作確認】")
     print(f"  入力: {test_text}")

@@ -48,7 +48,9 @@ def load_sentencepiece_tokenizer(tokenizer_path: str):
 
     sp = spm.SentencePieceProcessor()
     sp.Load(tokenizer_path)
-    return lambda text: sp.EncodeAsIds(text) if text else []
+    from src.code_text import CodecTokenizer  # 改行記号入りのトークナイザーなら、改行・インデントを記号にしてから符号化する
+    codec = CodecTokenizer(sp)
+    return lambda text: codec.encode(text) if text else []
 
 
 def process_jsonl(input_path: str, output_path: str, tokenize_fn=None) -> dict:

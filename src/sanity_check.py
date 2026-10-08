@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--num_samples", type=int, default=50, help="サンプル数（多いと時間がかかる）")
     parser.add_argument("--show_examples", type=int, default=3, help="カテゴリごとに表示する失敗例の数")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max_new_tokens", type=int, default=128,
+                        help="生成する最大トークン数。手順つき算数CoT(約380文字まで)を評価するときは384を指定する")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -75,7 +77,7 @@ def main():
         question = item["input"]
         true_answer = item.get("answer", "")
 
-        generated = generate_answer(model, sp, tok_meta, question, device, max_new_tokens=128)
+        generated = generate_answer(model, sp, tok_meta, question, device, max_new_tokens=args.max_new_tokens)
         extracted = extract_answer_for_category(generated, category)
 
         is_correct = _normalize_text(extracted) == _normalize_text(true_answer)

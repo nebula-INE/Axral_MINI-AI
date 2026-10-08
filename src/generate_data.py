@@ -41,8 +41,13 @@ def _arith_q(kind: str, original_template: str, a: int, b: int) -> str:
     return random.choice(ARITH_PHRASINGS[kind]).format(a, b)
 
 
-def generate_arithmetic_data(count: int) -> list[dict]:
+def generate_arithmetic_data(count: int, style: str = "oneshot", ranges: str = "default") -> list[dict]:
     """数学・論理問題（CoT付き、30%）。
+
+    style="oneshot": 従来のCoT（1つの式でまとめて計算する）。既定。
+    style="stepwise": 位ごとに分解した手順つきCoT（src/arith_cot.py）。1式は「1桁×1桁」
+        「2数の足し算」「位取り」程度に刻む。ranges="wide" で数字の範囲を広げる。
+
     接続詞（まず/次に/よって）を明示的に入れ、count_reasoning_steps()が
     複数ステップとして認識できるようにしている（Gate1採用率対策）。
     """
@@ -75,6 +80,21 @@ def generate_arithmetic_data(count: int) -> list[dict]:
     ]
 
     data = []
+    if style == "stepwise":
+        from src.arith_cot import KINDS, make_problem
+        kind_template = dict(zip(KINDS, [t[0] for t in templates]))  # split/price/percent/speed/area の順
+        for i in range(count):
+            kind = random.choice(KINDS)
+            p = make_problem(kind, random, ranges)  # random モジュールを乱数源に使う（seed固定で再現可能）
+            data.append({
+                "id": f"arithmetic_{datetime.now().strftime('%Y%m%d')}_{i:05d}",
+                "input": _arith_q(kind, kind_template[kind], p["a"], p["b"]),
+                "cot": p["cot"],
+                "answer": p["answer"],
+                "meta": {"source": "synthetic", "lang": "ja", "category": "arithmetic",
+                         "arith_style": "stepwise", "date_created": datetime.now().isoformat()},
+            })
+        return data
     for i in range(count):
         template_input, template_cot, template_ans = random.choice(templates)
         # テンプレートに合わせた具体値を生成（cot末尾に答え確認の1引数を追加）
@@ -473,6 +493,10 @@ def main():
                              "1.0未満にすると、その割合の残りのサンプルは cot フィールドを"
                              "空にし、[BOS] input answer [EOS] という直接回答形式にする"
                              "（generate()側の挙動は変えず、データ側だけで制御する）。")
+    parser.add_argument("--arith_style", choices=["oneshot", "stepwise"], default="oneshot",
+                        help="算数CoTの形式。stepwise=位ごとに分解した手順つき（src/arith_cot.py）。")
+    parser.add_argument("--arith_ranges", choices=["default", "wide"], default="default",
+                        help="stepwise時の数字の範囲。wide=桁数が増えても手順が通用するかを見る広い範囲。")
     parser.add_argument("--version", default="v001",
                         help="出力ファイル名に使うバージョンタグ（例: v001, v_cot40）。"
                              "異なる実験のデータを別ファイルとして共存させるために使う。")
@@ -499,7 +523,7 @@ def main():
         print(f"  {category}: {count}件を生成中...", end="", flush=True)
 
         if category == "arithmetic":
-            data = generate_arithmetic_data(count)
+            data = generate_arithmetic_data(count, args.arith_style, args.arith_ranges)
         elif category == "technical":
             data = generate_technical_data(count)
         elif category == "code":

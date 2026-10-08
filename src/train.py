@@ -69,12 +69,15 @@ def load_tokenizer(tokenizer_path: str | None):
 
     import sentencepiece as spm
 
+    from src.code_text import CodecTokenizer
+
     sp = spm.SentencePieceProcessor()
     sp.Load(tokenizer_path)
+    codec = CodecTokenizer(sp)
 
     class _TokenizerWrapper:
         def decode(self, ids: list[int]) -> str:
-            return sp.DecodeIds([i for i in ids if i not in (pad_id, bos_id, eos_id)])
+            return codec.decode([i for i in ids if i not in (pad_id, bos_id, eos_id)])
 
     pad_id = sp.pad_id() if sp.pad_id() >= 0 else 0
     bos_id = sp.bos_id() if sp.bos_id() >= 0 else 1
@@ -152,6 +155,29 @@ def train(config_path: str):
                 log(f"⚠️ 互換性の無いcheckpointを {backup_dir} に退避し、0から学習を開始します。")
                 global_step = 0
 
+    # --- 事前学習済みの重みで初期化（再開用checkpointが無いときだけ） ---
+    init_from = train_cfg.get("init_from")
+    if init_from and global_step == 0:
+        ck = torch.load(init_from, map_location=device)
+        stored = ck.get("tokenizer_fingerprint")
+        if stored and tokenizer_fp and stored != tokenizer_fp:
+            raise RuntimeError(f"init_from '{init_from}' は別のトークナイザーで学習されています "
+                               f"({stored} ≠ {tokenizer_fp})。事前学習と同じトークナイザーを使ってください。")
+        model.load_state_dict(ck["model_state_dict"])
+        log(f"事前学習済みの重みで初期化: {init_from}（事前学習 {ck.get('tokens_seen', '?')} トークン）")
+
+    # --- 混合精度（training.amp: auto/fp16/bf16/off。既定は off = 従来どおり） ---
+    amp_mode = train_cfg.get("amp", "off")
+    amp_dtype, use_scaler = None, False
+    if device.type == "cuda" and amp_mode != "off":
+        if amp_mode == "bf16" or (amp_mode == "auto" and torch.cuda.is_bf16_supported()):
+            amp_dtype = torch.bfloat16
+        else:
+            amp_dtype, use_scaler = torch.float16, True
+    scaler = torch.cuda.amp.GradScaler() if use_scaler else None
+    if amp_dtype:
+        log(f"混合精度: {amp_dtype}")
+
     session_start = datetime.now()
     max_session_time = timedelta(minutes=config.get("kaggle", {}).get("max_session_time_minutes", 540))
 
@@ -177,14 +203,21 @@ def train(config_path: str):
             input_ids = batch["input_ids"].to(device)
             labels = batch["labels"].to(device)
 
-            outputs = model(input_ids)
-            loss = compute_loss(outputs.logits, labels, label_smoothing=train_cfg.get("label_smoothing", 0.0))
-            (loss / grad_accum_steps).backward()
+            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None):
+                outputs = model(input_ids)
+            loss = compute_loss(outputs.logits.float(), labels, label_smoothing=train_cfg.get("label_smoothing", 0.0))
+            ((loss / grad_accum_steps) if scaler is None else scaler.scale(loss / grad_accum_steps)).backward()
             train_loss_accum += loss.item()
 
             if (batch_idx + 1) % grad_accum_steps == 0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.get("max_grad_norm", 1.0))
-                optimizer.step()
+                if scaler is not None:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1

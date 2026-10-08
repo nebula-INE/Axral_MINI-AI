@@ -144,3 +144,46 @@ def test_train_one_step_runs(tmp_path):
     result = train(str(config_path))
     assert result["final_step"] >= 1
     assert result["best_val_loss"] == result["best_val_loss"]  # NaNでないことの簡易チェック
+
+
+# --------------------------------------------------------------------------- 算数の手順つきCoT（arith_cot）
+def test_arith_stepwise_math_and_format():
+    import random
+    from src.arith_cot import KINDS, cot_equation_loads, make_problem, verify_cot_math
+    from src.eval import extract_final_answer
+    from src.eval_cot import verify_arithmetic
+
+    rnd = random.Random(1)
+    for ranges in ("default", "wide"):
+        for kind in KINDS:
+            for _ in range(500):
+                p = make_problem(kind, rnd, ranges)
+                assert verify_cot_math(p["cot"]), p["cot"]                     # 全式が（余り込みで）正しい
+                assert verify_arithmetic(p["cot"], p["answer"]) == 1.0, p["cot"]  # 既存の品質判定が満点
+                assert extract_final_answer(p["cot"] + " " + p["answer"]) == p["answer"]
+                # 1式が重くならない（wide は2桁の除数で「3桁÷2桁」が出るため上限を1つ緩める）
+                assert max(cot_equation_loads(p["cot"])) <= (5 if ranges == "default" else 6), p["cot"]
+                assert "\n" not in p["cot"]
+
+
+def test_arith_mul_div_steps_exhaustive():
+    from src.arith_cot import div_steps, mul_steps, verify_cot_math
+    for a in list(range(2, 120)) + [275, 999, 6574, 10000]:
+        for b in list(range(2, 100)):
+            steps, r = mul_steps(a, b)
+            assert r == a * b and verify_cot_math("。".join(steps)), (a, b, steps)
+    for d in range(2, 21):
+        for q in list(range(1, 300)) + [1000, 4500, 9999]:
+            steps, r = div_steps(d * q, d)
+            assert r == q and verify_cot_math("。".join(steps)), (d, q, steps)
+            assert steps[-1].split("=")[-1].strip().split("余り")[0] == str(q), (d, q, steps)
+
+
+def test_generate_arithmetic_stepwise_hook():
+    import random
+    from src.generate_data import generate_arithmetic_data
+    random.seed(0)
+    old = generate_arithmetic_data(20)                       # 既定は従来どおり
+    new = generate_arithmetic_data(20, style="stepwise")
+    assert all("arith_style" not in x["meta"] for x in old)
+    assert all(x["meta"]["arith_style"] == "stepwise" and x["cot"] and x["answer"] for x in new)

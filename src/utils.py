@@ -126,3 +126,11 @@ def split_reasoning_answer(text: str) -> tuple[str, str]:
         reasoning, answer = text.rsplit("。 ", 1)
         return reasoning + "。", answer.strip()
     return "", text
+
+
+def native_bf16_supported() -> bool:
+    """GPUが bf16 を「ハードウェアで」計算できるか（Ampere世代 = compute capability 8.0 以上）。
+    torch.cuda.is_bf16_supported() は T4 のような古いGPUでも True を返すが、実際はソフトウェアで
+    エミュレートされて遅い。T4 では fp16（勾配スケーリング付き）のほうが数倍速いので、こちらで判定する。"""
+    import torch
+    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8

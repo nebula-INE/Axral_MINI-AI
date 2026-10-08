@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 from src.code_text import CodecTokenizer
 from src.model import TransformerLM
-from src.utils import compute_tokenizer_fingerprint, load_config
+from src.utils import compute_tokenizer_fingerprint, load_config, native_bf16_supported
 
 SOURCES = ("wiki", "code")
 
@@ -83,7 +83,7 @@ def pick_amp(mode: str, device):
     """(autocast用dtype or None, GradScalerを使うか)"""
     if device.type != "cuda" or mode == "off":
         return None, False
-    if mode == "bf16" or (mode == "auto" and torch.cuda.is_bf16_supported()):
+    if mode == "bf16" or (mode == "auto" and native_bf16_supported()):
         return torch.bfloat16, False
     return torch.float16, True
 

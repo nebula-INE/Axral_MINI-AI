@@ -25,6 +25,7 @@ import torch
 import torch.nn.functional as F
 
 from src.model import TransformerLM
+from src.utils import native_bf16_supported
 
 SIZES = [  # (名前, d_model, n_layers, n_heads)。d_ff は 4 × d_model
     ("S", 384, 8, 6),
@@ -88,7 +89,7 @@ def main() -> None:
         print("⚠ GPUが見つかりません。測定値は実際の学習の参考になりません（Notebookの設定でGPUを有効にしてください）")
     amp_dtype, use_scaler = None, False
     if device.type == "cuda" and args.amp != "off":
-        if args.amp == "bf16" or (args.amp == "auto" and torch.cuda.is_bf16_supported()):
+        if args.amp == "bf16" or (args.amp == "auto" and native_bf16_supported()):
             amp_dtype = torch.bfloat16
         else:
             amp_dtype, use_scaler = torch.float16, True

@@ -90,7 +90,7 @@ def build_corpus(args) -> None:
                     fout.write(ch.replace("\n", " ") + "\n")
                     used += len(ch)
                     n_lines += 1
-            print(f"  {src}: 総{total:,}文字のうち約{used:,}文字を使用（抜き出し確率 {p:.3f}）")
+            print(f"  {src}: 総{total:,}文字のうち約{used:,}文字を使用（改行・インデント記号の分を含む。抜き出し確率 {p:.3f}）")
         # 指示データ（短いので全部）と、追加のコーパス（テンプレートデータ等）
         extras = [Path(args.sft_dir) / "hf_corpus.txt"] + [Path(x) for x in (args.extra_corpus or [])]
         for ex in extras:
@@ -192,7 +192,7 @@ def main() -> None:
     c.add_argument("--out", default="data/p7_tok_corpus.txt")
     c.add_argument("--wiki_chars", type=int, default=60_000_000)
     c.add_argument("--code_chars", type=int, default=30_000_000)
-    c.add_argument("--max_line_chars", type=int, default=1500)
+    c.add_argument("--max_line_chars", type=int, default=1000)
     c.add_argument("--seed", type=int, default=42)
 
     p = sub.add_parser("pack")

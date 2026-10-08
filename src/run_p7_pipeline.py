@@ -131,7 +131,7 @@ def main() -> None:
         run([py, "-m", "src.pack_tokens", "corpus", "--pretrain_dir", a.pretrain_dir, "--sft_dir", a.sft_dir,
              "--extra_corpus", f"data/{TPL_VERSION}_corpus.txt", f"data/{REF_VERSION}_corpus.txt",
              "--out", "data/p7_tok_corpus.txt", "--seed", str(a.seed)], "トークナイザー用コーパスの作成", root)
-        run([py, "src/train_tokenizer.py", "--corpus", "data/p7_tok_corpus.txt", "--output_dir", "data/",
+        run([py, "-m", "src.train_tokenizer", "--corpus", "data/p7_tok_corpus.txt", "--output_dir", "data/",
              "--vocab_size", str(a.vocab_size), "--model_prefix", TOK_PREFIX, "--character_coverage", "0.9999",
              "--code_aware", "--input_sentence_size", "2000000"], f"トークナイザー学習（語彙{a.vocab_size}・コード対応）", root)
         require(root, tok_model, "トークナイザー学習")

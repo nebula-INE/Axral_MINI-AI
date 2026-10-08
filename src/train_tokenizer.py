@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+
+# `python src/train_tokenizer.py` で直接実行しても `from src.xxx import ...` が通るよう、プロジェクトルートを追加する
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def main():
@@ -69,7 +73,8 @@ def main():
     extra = {}
     if args.code_aware:
         from src.code_text import USER_SYMBOLS
-        extra.update(user_defined_symbols=USER_SYMBOLS, remove_extra_whitespaces=False)
+        # max_sentence_length はバイト数。日本語は1文字3バイトなので、既定の4192だと約1400文字を超える行が捨てられる
+        extra.update(user_defined_symbols=USER_SYMBOLS, remove_extra_whitespaces=False, max_sentence_length=16384)
         print(f"  code_aware: 改行・インデント記号 {USER_SYMBOLS} を登録（空白の整理は無効）")
     if args.input_sentence_size:
         extra.update(input_sentence_size=args.input_sentence_size, shuffle_input_sentence=True)

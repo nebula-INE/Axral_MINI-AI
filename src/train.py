@@ -21,7 +21,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from src.model import TransformerLM
 from src.data import build_dataloaders
 from src.eval import evaluate
-from src.utils import load_config, save_checkpoint, find_latest_checkpoint, load_checkpoint, compute_tokenizer_fingerprint
+from src.utils import load_config, save_checkpoint, find_latest_checkpoint, load_checkpoint, compute_tokenizer_fingerprint, native_bf16_supported
 
 
 def get_linear_schedule_with_warmup(optimizer, num_warmup_steps: int, num_training_steps: int):
@@ -170,7 +170,7 @@ def train(config_path: str):
     amp_mode = train_cfg.get("amp", "off")
     amp_dtype, use_scaler = None, False
     if device.type == "cuda" and amp_mode != "off":
-        if amp_mode == "bf16" or (amp_mode == "auto" and torch.cuda.is_bf16_supported()):
+        if amp_mode == "bf16" or (amp_mode == "auto" and native_bf16_supported()):
             amp_dtype = torch.bfloat16
         else:
             amp_dtype, use_scaler = torch.float16, True
@@ -182,6 +182,7 @@ def train(config_path: str):
     max_session_time = timedelta(minutes=config.get("kaggle", {}).get("max_session_time_minutes", 540))
 
     best_val_loss = float("inf")
+    last_eval_step = -1
     no_improve_count = 0
     grad_accum_steps = train_cfg.get("grad_accum_steps", 1)
     stop_training = False
@@ -229,6 +230,7 @@ def train(config_path: str):
                         wandb.log({"train_loss": avg, "lr": scheduler.get_last_lr()[0], "step": global_step})
 
                 if global_step % train_cfg.get("eval_frequency", 500) == 0:
+                    last_eval_step = global_step
                     val_loss, metrics = evaluate(model, val_loader, device, tokenizer=tokenizer)
                     log(
                         f"Val Loss(PPL): {val_loss:.4f} ({metrics['ppl']:.2f}), "
@@ -251,6 +253,16 @@ def train(config_path: str):
 
                 if global_step % train_cfg.get("checkpoint_frequency", 1000) == 0:
                     save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir, tokenizer_fingerprint=tokenizer_fp)
+
+    # 学習の最後に、まだ評価していなければ1回評価する（評価間隔より短い学習でも best checkpoint が必ずできる）
+    if global_step != last_eval_step and global_step > 0:
+        val_loss, metrics = evaluate(model, val_loader, device, tokenizer=tokenizer)
+        log(f"最終評価 Val Loss(PPL): {val_loss:.4f} ({metrics['ppl']:.2f}), EM: {metrics.get('em', 0):.3f}, "
+            f"F1: {metrics.get('f1', 0):.3f}")
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            save_checkpoint(global_step, model, optimizer, scheduler, ckpt_dir, is_best=True, tokenizer_fingerprint=tokenizer_fp)
+            log(f"✓ Best checkpoint 保存 (val_loss={val_loss:.4f})")
 
     log(f"✓ Training complete at step {global_step}")
     if use_wandb:

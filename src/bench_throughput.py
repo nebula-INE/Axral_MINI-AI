@@ -44,7 +44,7 @@ def build(vocab: int, d: int, layers: int, heads: int, block: int, dropout: floa
 
 def measure(model, vocab: int, block: int, micro_bs: int, steps: int, warmup: int, device, amp_dtype, use_scaler):
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    scaler = torch.cuda.amp.GradScaler() if use_scaler else None
+    scaler = torch.amp.GradScaler("cuda") if use_scaler else None
     x = torch.randint(0, vocab, (micro_bs, block), device=device)
     y = torch.randint(0, vocab, (micro_bs, block), device=device)
     model.train()
@@ -78,6 +78,8 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--efficiency", type=float, default=0.85)
+    ap.add_argument("--gpus", type=int, default=1, help="学習に使うGPU数。予算内トークン数を、複数GPUでの高速化を見込んで増やす")
+    ap.add_argument("--ddp_scaling", type=float, default=0.85, help="2枚目以降のGPUで、1枚分の速度がどれだけ上乗せされるか（通信の分だけ1未満）")
     ap.add_argument("--amp", choices=["auto", "fp16", "bf16", "off"], default="auto")
     ap.add_argument("--available_tokens", type=float, default=0,
                     help="用意できる学習データの総トークン数（分かれば指定。足りないときは注意を表示する）")
@@ -94,7 +96,7 @@ def main() -> None:
         else:
             amp_dtype, use_scaler = torch.float16, True
     gpu = torch.cuda.get_device_name(0) if device.type == "cuda" else "cpu"
-    print(f"GPU: {gpu} / 混合精度: {amp_dtype} / 窓 {args.block} / 語彙 {args.vocab_size} / 予算 {args.budget_hours}時間\n")
+    print(f"GPU: {gpu} / 混合精度: {amp_dtype} / 窓 {args.block} / 語彙 {args.vocab_size} / 予算 {args.budget_hours}時間 / GPU {args.gpus}枚\n")
 
     rows = []
     for name, d, layers, heads in SIZES:
@@ -119,7 +121,8 @@ def main() -> None:
             rows.append({"name": name, "params": n_params, "error": err})
             print(f"  {name}: {n_params / 1e6:.1f}M → 測定できませんでした（{err}）")
             continue
-        tokens = tps * args.efficiency * args.budget_hours * 3600
+        gpu_factor = 1 + (args.gpus - 1) * args.ddp_scaling
+        tokens = tps * gpu_factor * args.efficiency * args.budget_hours * 3600
         rows.append({"name": name, "d_model": d, "n_layers": layers, "n_heads": heads, "d_ff": 4 * d,
                      "params": n_params, "micro_bs": bs, "tok_per_s": round(tps),
                      "budget_tokens": round(tokens), "tokens_per_param": round(tokens / n_params, 1)})

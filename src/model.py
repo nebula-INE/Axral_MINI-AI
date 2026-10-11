@@ -161,15 +161,35 @@ class TransformerLM(nn.Module):
         strategy: str = "greedy",
         temperature: float = 1.0,
         top_k: int | None = None,
+        repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
     ) -> torch.Tensor:
-        """自己回帰生成。§4.4評価修正版で使用する（teacher-forcingのargmaxとは別物）。"""
+        """自己回帰生成。§4.4評価修正版で使用する（teacher-forcingのargmaxとは別物）。
+
+        repetition_penalty>1: 既に出たトークンのlogitを弱める（1.0で無効）。
+        no_repeat_ngram_size>0: 同じn-gramの再出現を禁止する（0で無効）。
+        """
         self.eval()
         device = input_ids.device
         generated = input_ids
 
         for _ in range(max_new_tokens):
             cond = generated[:, -self.max_seq_length:]
-            logits = self.forward(cond).logits[:, -1, :]  # (B, vocab)
+            logits = self.forward(cond).logits[:, -1, :].clone()  # (B, vocab)
+
+            if repetition_penalty != 1.0:
+                for b in range(generated.size(0)):
+                    ids = torch.unique(generated[b])
+                    sc = logits[b, ids]
+                    logits[b, ids] = torch.where(sc > 0, sc / repetition_penalty, sc * repetition_penalty)
+            n = no_repeat_ngram_size
+            if n > 0 and generated.size(1) >= n:
+                for b in range(generated.size(0)):
+                    seq = generated[b].tolist()
+                    prefix = tuple(seq[-(n - 1):]) if n > 1 else ()
+                    for i in range(len(seq) - n + 1):
+                        if tuple(seq[i:i + n - 1]) == prefix:
+                            logits[b, seq[i + n - 1]] = float("-inf")
 
             if strategy == "greedy":
                 next_token = torch.argmax(logits, dim=-1, keepdim=True)

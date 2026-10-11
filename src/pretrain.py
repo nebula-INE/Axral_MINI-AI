@@ -15,6 +15,9 @@ pretrain.py
     同じコマンドをもう一度実行すれば、続きから再開する（resume: true）。
   - 検証損失は wiki / code を別々に出す（どちらが伸びているかが分かる）。評価のたびに短い生成例も表示する。
   - checkpoint は train.py の init_from がそのまま読める形式（model_state_dict を含む）。
+  - GPUが複数あるときは torchrun で起動すると、全GPUで学習する（DDP）。1回の更新で使うトークン数は変わらない。
+      torchrun --standalone --nproc_per_node=2 -m src.pretrain --config configs/exp_p8_pretrain.yaml
+    学習率・保存・終了の判断は rank 0 が決めて全プロセスに配るので、時間予算でも全員が同じ瞬間に止まる。
 """
 from __future__ import annotations
 
@@ -24,17 +27,20 @@ import json
 import math
 import os
 import time
-from datetime import datetime
+from contextlib import nullcontext
+from datetime import datetime, timedelta
 
 import numpy as np
 import torch
+import torch.distributed as dist
+import torch.nn as nn
 import torch.nn.functional as F
 
 from src.code_text import CodecTokenizer
 from src.model import TransformerLM
 from src.utils import compute_tokenizer_fingerprint, load_config, native_bf16_supported
 
-SOURCES = ("wiki", "code")
+SOURCES = ("wiki", "web", "code")
 
 
 # --------------------------------------------------------------------------- データ
@@ -77,6 +83,31 @@ def lr_at(progress: float, lr: float, min_lr: float, warmup_progress: float) -> 
         return lr * (progress / max(warmup_progress, 1e-9))
     t = min(1.0, (progress - warmup_progress) / max(1.0 - warmup_progress, 1e-9))
     return min_lr + 0.5 * (lr - min_lr) * (1.0 + math.cos(math.pi * t))
+
+
+# --------------------------------------------------------------------------- 分散（DDP）
+def setup_dist() -> tuple[int, int, int]:
+    """(rank, world_size, local_rank)。torchrun で起動されていなければ (0, 1, 0)。"""
+    world = int(os.environ.get("WORLD_SIZE", "1"))
+    if world <= 1:
+        return 0, 1, 0
+    rank, local = int(os.environ["RANK"]), int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local)
+    # 評価や保存の間、他のプロセスは待つ。待ち時間の上限を長めにしておく
+    dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo", timeout=timedelta(minutes=60))
+    return rank, world, local
+
+
+class _LogitsOnly(nn.Module):
+    """DDPで包むための薄い入れ物（出力を logits のテンソルだけにする）。重みは中のモデルと共有。"""
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x).logits
 
 
 def pick_amp(mode: str, device):
@@ -140,10 +171,17 @@ def sample_texts(model, codec: CodecTokenizer | None, device, prompts: list[str]
 
 # --------------------------------------------------------------------------- メイン
 def pretrain(config_path: str) -> dict:
+    rank, world, local_rank = setup_dist()
+    is_main = rank == 0
+
+    def log(*a):
+        if is_main:
+            print(*a, flush=True)
+
     cfg = load_config(config_path)
     exp = cfg.get("experiment_name", "p7_pretrain")
     pc, tc, oc = cfg["pretrain"], cfg["training"], cfg["optimizer"]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda", local_rank) if torch.cuda.is_available() else torch.device("cpu")
 
     meta_path = os.path.join(pc["token_dir"], "pack_meta.json")
     with open(meta_path, encoding="utf-8") as f:
@@ -153,13 +191,14 @@ def pretrain(config_path: str) -> dict:
     model_cfg = dict(cfg["model"])
     model_cfg["vocab_size"] = vocab
     block = model_cfg["max_seq_length"]
+    torch.manual_seed(1234)  # 全プロセスで同じ初期重みにする（DDPはさらに rank 0 の重みを配る）
     model = TransformerLM(model_cfg).to(device)
     n_params = model.num_parameters()
 
     tok_path = cfg["data"].get("tokenizer_path")
     tok_fp = compute_tokenizer_fingerprint(tok_path)
     codec = None
-    if tok_path and os.path.exists(tok_path):
+    if is_main and tok_path and os.path.exists(tok_path):
         import sentencepiece as spm
         sp = spm.SentencePieceProcessor()
         sp.Load(tok_path)
@@ -171,12 +210,14 @@ def pretrain(config_path: str) -> dict:
         raise FileNotFoundError(f"{pc['token_dir']} に train_*.bin が見つかりません。先に pack_tokens pack を実行してください")
     mix = {s: float(w) for s, w in pc.get("mix", {"wiki": 0.7, "code": 0.3}).items()}
     mix = {s: w for s, w in mix.items() if s in train_data.arrays}
-    print(f"[{exp}] パラメータ数 {n_params:,} / 語彙 {vocab} / 窓 {block}")
-    print(f"  学習トークン数: {train_data.tokens()} / 混合比率: {mix}")
+    if not mix:
+        raise ValueError(f"mix の種類 {list(pc.get('mix', {}))} に対応する train_*.bin がありません: {list(train_data.arrays)}")
+    log(f"[{exp}] パラメータ数 {n_params:,} / 語彙 {vocab} / 窓 {block} / GPU数(プロセス数) {world}")
+    log(f"  学習トークン数: {train_data.tokens()} / 混合比率: {mix}")
 
     micro_bs = tc["micro_batch_size"]
     accum = tc["grad_accum_steps"]
-    tokens_per_step = micro_bs * accum * block
+    tokens_per_step = micro_bs * accum * block * world  # 全GPU合計で1回の更新に使うトークン数
     total_tokens = int(tc.get("total_tokens") or 0)
     budget_s = float(tc.get("time_budget_hours") or 0) * 3600
     if not total_tokens and not budget_s:
@@ -184,9 +225,9 @@ def pretrain(config_path: str) -> dict:
     total_steps = math.ceil(total_tokens / tokens_per_step) if total_tokens else 0
     if total_tokens:
         epochs = total_tokens / max(sum(train_data.tokens().values()), 1)
-        print(f"  総 {total_tokens:,} トークン = {total_steps:,}ステップ（学習データ全体の約{epochs:.2f}周）")
+        log(f"  総 {total_tokens:,} トークン = {total_steps:,}ステップ（学習データ全体の約{epochs:.2f}周）")
     else:
-        print(f"  時間予算 {budget_s / 3600:.1f}時間（1ステップ={tokens_per_step:,}トークン）")
+        log(f"  時間予算 {budget_s / 3600:.1f}時間（1ステップ={tokens_per_step:,}トークン）")
 
     decay, no_decay = [], []
     for n, p in model.named_parameters():
@@ -195,12 +236,13 @@ def pretrain(config_path: str) -> dict:
         [{"params": decay, "weight_decay": oc.get("weight_decay", 0.1)}, {"params": no_decay, "weight_decay": 0.0}],
         lr=oc["lr"], betas=(oc.get("beta1", 0.9), oc.get("beta2", 0.95)), eps=oc.get("eps", 1e-8))
     amp_dtype, use_scaler = pick_amp(tc.get("amp", "auto"), device)
-    scaler = torch.cuda.amp.GradScaler() if use_scaler else None
-    print(f"  混合精度: {amp_dtype if amp_dtype else 'なし'}")
+    scaler = torch.amp.GradScaler("cuda") if use_scaler else None
+    log(f"  混合精度: {amp_dtype if amp_dtype else 'なし'}")
 
     ckpt_dir = os.path.join(cfg.get("results_dir", "results/checkpoints"), exp)
     log_path = os.path.join(cfg.get("logs_dir", "logs"), f"{exp}_pretrain.jsonl")
-    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    if is_main:
+        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
 
     step, tokens_seen, elapsed_prev = 0, 0, 0.0
     if tc.get("resume", True):
@@ -215,25 +257,38 @@ def pretrain(config_path: str) -> dict:
             if scaler and ck.get("scaler_state_dict"):
                 scaler.load_state_dict(ck["scaler_state_dict"])
             step, tokens_seen, elapsed_prev = ck["step"], ck.get("tokens_seen", 0), ck.get("elapsed_seconds", 0.0)
-            print(f"  再開: {cks[-1]}（step {step}, {tokens_seen:,}トークン, 経過{elapsed_prev / 3600:.2f}時間）")
+            del ck
+            log(f"  再開: {cks[-1]}（step {step}, {tokens_seen:,}トークン, 経過{elapsed_prev / 3600:.2f}時間）")
+
+    # 学習に使う入れ物。複数GPUのときだけDDPで包む（重みは model と共有しているので、保存・評価は model で行う）
+    fwd: nn.Module = _LogitsOnly(model)
+    if world > 1:
+        fwd = nn.parallel.DistributedDataParallel(fwd, device_ids=[local_rank] if device.type == "cuda" else None)
 
     session_limit = tc.get("session_max_minutes", cfg.get("kaggle", {}).get("max_session_time_minutes", 540)) * 60 * 0.92
-    rng = np.random.default_rng(1234 + step)
+    rng = np.random.default_rng([1234, step, rank])  # GPUごとに別の窓を読む
     t_session = time.time()
     warm = float(oc.get("warmup_fraction", 0.02))
     eval_every, ckpt_every = tc.get("eval_every", 500), tc.get("checkpoint_every", 500)
     prompts = tc.get("sample_prompts", ["日本の首都は", "def add(a, b):\n"])
     last_loss, t_log, tok_log = None, time.time(), tokens_seen
+    last_ckpt_t, ckpt_minutes = time.time(), tc.get("checkpoint_minutes", 20)  # ステップ数に加えて、時間でも保存する
     model.train()
-    done = False
+    ctl = torch.zeros(3, dtype=torch.float64, device=device)  # rank 0 が決めて配る: [進み具合, 今保存する, 今終了する]
 
     def progress() -> float:
         if total_steps:
             return step / total_steps
         return (elapsed_prev + time.time() - t_session) / budget_s
 
-    while not done:
-        prog = progress()
+    while True:
+        if is_main:  # 時間に関わる判断は rank 0 だけが行い、全員に配る（プロセス間で食い違わないように）
+            ctl[0] = progress()
+            ctl[1] = 1.0 if time.time() - last_ckpt_t > ckpt_minutes * 60 else 0.0
+            ctl[2] = 1.0 if (time.time() - t_session) > session_limit else 0.0
+        if world > 1:
+            dist.broadcast(ctl, src=0)
+        prog, ckpt_due, stop_for_session = float(ctl[0]), bool(ctl[1]), bool(ctl[2])
         if prog >= 1.0:
             break
         lr_now = lr_at(prog, oc["lr"], oc.get("min_lr", oc["lr"] * 0.1), warm)
@@ -241,12 +296,14 @@ def pretrain(config_path: str) -> dict:
             g["lr"] = lr_now
 
         loss_acc = 0.0
-        for _ in range(accum):
+        for i in range(accum):
             x, y = train_data.batch(micro_bs, mix, rng, device)
-            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None):
-                logits = model(x).logits
-            loss = F.cross_entropy(logits.float().view(-1, logits.size(-1)), y.view(-1)) / accum
-            (scaler.scale(loss) if scaler else loss).backward()
+            sync_ctx = fwd.no_sync() if (world > 1 and i < accum - 1) else nullcontext()  # 勾配の通信は最後の1回だけ
+            with sync_ctx:
+                with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None):
+                    logits = fwd(x)
+                loss = F.cross_entropy(logits.float().view(-1, logits.size(-1)), y.view(-1)) / accum
+                (scaler.scale(loss) if scaler else loss).backward()
             loss_acc += loss.item()
         if scaler:
             scaler.unscale_(optimizer)
@@ -264,7 +321,7 @@ def pretrain(config_path: str) -> dict:
             raise FloatingPointError(f"損失が発散しました（step {step}）。学習率を下げてやり直してください")
 
         elapsed = elapsed_prev + time.time() - t_session
-        if step % tc.get("log_every", 50) == 0:
+        if is_main and (step == 1 or step % tc.get("log_every", 50) == 0 or time.time() - t_log > 60):
             now = time.time()
             tps = (tokens_seen - tok_log) / max(now - t_log, 1e-6)
             t_log, tok_log = now, tokens_seen
@@ -274,7 +331,7 @@ def pretrain(config_path: str) -> dict:
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-        if step % eval_every == 0:
+        if is_main and step % eval_every == 0:  # 評価と生成例は rank 0 だけ。他のプロセスは次の通信で待つ
             vl = evaluate(model, val_data, micro_bs, tc.get("eval_iters", 40), device, amp_dtype)
             rec = {"step": step, "val_loss": {k: round(v, 4) for k, v in vl.items()},
                    "val_ppl": {k: round(math.exp(v), 2) for k, v in vl.items()}}
@@ -284,31 +341,45 @@ def pretrain(config_path: str) -> dict:
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-        stop_for_session = (time.time() - t_session) > session_limit
-        if step % ckpt_every == 0 or stop_for_session:
-            save_ckpt(os.path.join(ckpt_dir, f"checkpoint_{step:07d}.pt"), model, optimizer, scaler,
-                      step, tokens_seen, elapsed, tok_fp)
+        if step % ckpt_every == 0 or stop_for_session or ckpt_due:
+            last_ckpt_t = time.time()  # 全プロセスで更新（保存するのは rank 0 だけ）
+            if is_main:
+                save_ckpt(os.path.join(ckpt_dir, f"checkpoint_{step:07d}.pt"), model, optimizer, scaler,
+                          step, tokens_seen, elapsed, tok_fp)
         if stop_for_session:
-            print(f"⚠ セッション時間の上限に近づいたため、step {step} で保存して終了します。"
-                  f"同じコマンドをもう一度実行すると続きから再開します。")
+            log(f"⚠ セッション時間の上限に近づいたため、step {step} で保存して終了します。"
+                f"同じコマンドをもう一度実行すると続きから再開します。")
+            if world > 1:
+                dist.barrier()
             return {"finished": False, "step": step, "tokens": tokens_seen}
 
     elapsed = elapsed_prev + time.time() - t_session
-    final = os.path.join(ckpt_dir, f"checkpoint_{step:07d}.pt")
-    save_ckpt(final, model, optimizer, scaler, step, tokens_seen, elapsed, tok_fp)
-    torch.save({"step": step, "model_state_dict": model.state_dict(), "tokenizer_fingerprint": tok_fp,
-                "tokens_seen": tokens_seen}, os.path.join(ckpt_dir, "pretrained_final.pt"))
-    vl = evaluate(model, val_data, micro_bs, max(tc.get("eval_iters", 40), 100), device, amp_dtype)
-    print(f"✓ 事前学習完了: {tokens_seen:,}トークン / {elapsed / 3600:.2f}時間 / 最終の検証損失 "
-          f"{ {k: round(v, 4) for k, v in vl.items()} }")
-    return {"finished": True, "step": step, "tokens": tokens_seen, "val_loss": vl}
+    result: dict = {"finished": True, "step": step, "tokens": tokens_seen}
+    if is_main:
+        final = os.path.join(ckpt_dir, f"checkpoint_{step:07d}.pt")
+        save_ckpt(final, model, optimizer, scaler, step, tokens_seen, elapsed, tok_fp)
+        torch.save({"step": step, "model_state_dict": model.state_dict(), "tokenizer_fingerprint": tok_fp,
+                    "tokens_seen": tokens_seen}, os.path.join(ckpt_dir, "pretrained_final.pt"))
+        vl = evaluate(model, val_data, micro_bs, max(tc.get("eval_iters", 40), 100), device, amp_dtype)
+        print(f"✓ 事前学習完了: {tokens_seen:,}トークン / {elapsed / 3600:.2f}時間 / 最終の検証損失 "
+              f"{ {k: round(v, 4) for k, v in vl.items()} }", flush=True)
+        result["val_loss"] = vl
+    if world > 1:
+        dist.barrier()
+    return result
 
 
 def _main() -> None:
     ap = argparse.ArgumentParser(description="事前学習")
     ap.add_argument("--config", required=True)
     args = ap.parse_args()
-    print(json.dumps(pretrain(args.config), ensure_ascii=False, indent=2, default=str))
+    try:
+        res = pretrain(args.config)
+        if int(os.environ.get("RANK", "0")) == 0:
+            print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
+    finally:
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":

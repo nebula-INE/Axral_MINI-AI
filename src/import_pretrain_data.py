@@ -4,6 +4,7 @@ p7（2段階学習）用のデータを取得・整形する。
 
   事前学習用（普通の文章とコードを大量に読ませる）
     - 日本語Wikipedia
+    - 日本語Web（FineWeb-2 の jpn_Jpan。ストリーミングで必要な分だけ）
     - CodeSearchNet（Pythonの関数）
   指示学習用（既存の hf_import と同じ形式 = mix_data.py がそのまま読める）
     - llm-japanese-dataset-vanilla（日本語の指示データ）
@@ -40,6 +41,7 @@ from pathlib import Path
 
 # --------------------------------------------------------------------------- 既定のデータ源（実物は未確認。候補を順に試す）
 WIKI_CANDIDATES = [("wikimedia/wikipedia", "20231101.ja")]
+WEB_CANDIDATES = [("HuggingFaceFW/fineweb-2", "jpn_Jpan"), ("range3/cc100-ja", None)]
 CODE_CANDIDATES = [("Nan-Do/code-search-net-python", None), ("code-search-net/code_search_net", "python")]
 VANILLA_CANDIDATES = [("izumi-lab/llm-japanese-dataset-vanilla", None)]
 CODE_INSTR_CANDIDATES = [("iamtarun/python_code_instructions_18k_alpaca", None),
@@ -59,6 +61,24 @@ def clean_wiki(text: str, min_chars: int = 200) -> str | None:
     lines = [ln for ln in lines if ln and not re.fullmatch(r"=+\s*.*?\s*=+", ln)]  # 見出しのマークアップ行
     out = "\n".join(lines).strip()
     return out if len(out) >= min_chars else None
+
+
+_JA_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+
+
+def clean_web(text: str, min_chars: int = 200, max_chars: int = 30000, min_ja_ratio: float = 0.3) -> str | None:
+    """日本語Webの本文を整える。短い/長すぎる/日本語が少ない/URLだらけの文書は捨てる。"""
+    if not text:
+        return None
+    lines = [ln.strip() for ln in str(text).replace("\r\n", "\n").split("\n")]
+    out = _BLANKS_RE.sub("\n\n", "\n".join(ln for ln in lines if ln)).strip()
+    if not (min_chars <= len(out) <= max_chars):
+        return None
+    if len(_JA_RE.findall(out)) < min_ja_ratio * len(out):
+        return None
+    if len(_URL_RE.findall(out)) > 5:
+        return None
+    return out
 
 
 def clean_code(code: str, min_chars: int = 60, max_chars: int = 4000) -> str | None:
@@ -222,12 +242,16 @@ def main() -> None:
     ap.add_argument("--yardstick", default="eval_sets/yardstick_v1.jsonl")
     ap.add_argument("--include_existing_hf", default=None,
                     help="既存の hf_import ディレクトリ（dolly/oasst）。指定すると、指示データに加える")
-    for name in ("wiki", "code", "vanilla", "code_instr"):
+    for name in ("wiki", "web", "code", "vanilla", "code_instr"):
         ap.add_argument(f"--{name}_dataset", default=None, help=f"{name} のHFデータセット名（候補を差し替える）")
         ap.add_argument(f"--{name}_local", default=None, help=f"{name} のローカルファイル（jsonl/parquet）")
     ap.add_argument("--wiki_config", default=None)
     ap.add_argument("--wiki_max_docs", type=int, default=0)
     ap.add_argument("--wiki_max_chars", type=int, default=0, help="Wikipediaの合計文字数の上限（0なら全部）")
+    ap.add_argument("--web_config", default=None)
+    ap.add_argument("--web_max_docs", type=int, default=0)
+    ap.add_argument("--web_max_chars", type=int, default=1_500_000_000, help="日本語Webの合計文字数の上限（0なら制限なし。FineWeb-2は巨大なので必ず指定する）")
+    ap.add_argument("--web_min_lang_score", type=float, default=0.9, help="FineWeb-2の language_score の下限（列があるときだけ使う）")
     ap.add_argument("--code_max_docs", type=int, default=0)
     ap.add_argument("--code_max_chars", type=int, default=0)
     ap.add_argument("--sft_max_vanilla", type=int, default=60000)
@@ -272,6 +296,34 @@ def main() -> None:
                 records.append(dict(source_id="wiki_ja", url=f"hf:{used}", license="CC BY-SA (帰属表示・同条件継承)",
                                     source_type="public", category="pretrain", notes="日本語Wikipedia本文。事前学習用"))
 
+
+            web_cands = [(args.web_dataset, args.web_config)] if args.web_dataset else WEB_CANDIDATES
+            if args.web_max_docs != -1:  # -1 で日本語Webを使わない
+                ds, used = _open_stream(web_cands, args.web_local, "web")
+                if ds is not None:
+                    print(f"日本語Web: {used}（上限 {args.web_max_chars:,}文字）")
+                    try:  # 先頭のダンプに偏らないよう、ストリームの中でかき混ぜる
+                        ds = ds.shuffle(seed=args.seed, buffer_size=10000)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  （シャッフルできませんでした: {type(e).__name__}）")
+                    first_cols = []
+
+                    def web_docs():
+                        for row in ds:
+                            if not first_cols:
+                                first_cols.append(list(row.keys()))
+                            sc = row.get("language_score")
+                            if isinstance(sc, (int, float)) and sc < args.web_min_lang_score:
+                                continue
+                            t = clean_web(row.get("text") or pick_field(row, ("content", "body")) or "")
+                            if t:
+                                yield t
+                    _write_pretrain(out_dir, web_docs(), "web", writers, stats, args.web_max_docs, args.web_max_chars)
+                    if not stats["web_train_docs"]:
+                        print(f"  [注意] 日本語Webから1件も取れませんでした。列名: {first_cols}")
+                    records.append(dict(source_id="fineweb2_ja", url=f"hf:{used}", license="ODC-By 1.0（FineWeb-2。元のWebページの権利は別）",
+                                        source_type="public", category="pretrain", notes="日本語Web本文。事前学習用"))
+
             code_cands = [(args.code_dataset, None)] if args.code_dataset else CODE_CANDIDATES
             ds, used = _open_stream(code_cands, args.code_local, "code")
             if ds is not None:
@@ -297,7 +349,7 @@ def main() -> None:
             for w in writers.values():
                 w.close()
         print("\n【事前学習データ】")
-        for src in ("wiki", "code"):
+        for src in ("wiki", "web", "code"):
             print(f"  {src}: train {stats[f'{src}_train_docs']:,}件 / {stats[f'{src}_train_chars']:,}文字, "
                   f"val {stats[f'{src}_val_docs']:,}件 / {stats[f'{src}_val_chars']:,}文字")
 

@@ -16,7 +16,7 @@ pack_tokens.py
       --out_dir /kaggle/working/p7_tokens
 
 出力（pack）:
-  {out_dir}/train_wiki.bin, train_code.bin, val_wiki.bin, val_code.bin  uint16 のトークン番号
+  {out_dir}/train_{wiki,web,code}.bin, val_{wiki,web,code}.bin  uint16 のトークン番号（無い種類は空ファイル）
   {out_dir}/pack_meta.json                                              トークン数・1トークンあたりの文字数・語彙数
 """
 from __future__ import annotations
@@ -29,6 +29,8 @@ import time
 from pathlib import Path
 
 from src.code_text import NL, encode_text
+
+SRCS = ("wiki", "web", "code")
 
 
 # --------------------------------------------------------------------------- corpus
@@ -61,36 +63,48 @@ def _iter_docs(path: Path, p_keep: float, rng: random.Random):
                 yield json.loads(line)
 
 
+def _src_of(line: str) -> str | None:
+    """1行（{"src": "wiki", "text": ...}）の種類を、JSONを解釈せずに先頭から読み取る（数GBのファイルでも速い）。"""
+    if not line.startswith('{"src": "'):
+        return None
+    j = line.find('"', 9)
+    return line[9:j] if j > 0 else None
+
+
 def build_corpus(args) -> None:
     rng = random.Random(args.seed)
-    budgets = {"wiki": args.wiki_chars, "code": args.code_chars}
+    budgets = {"wiki": args.wiki_chars, "web": args.web_chars, "code": args.code_chars}
     pre = Path(args.pretrain_dir)
     n_lines = 0
+    path = pre / "pretrain.train.jsonl"
     with open(args.out, "w", encoding="utf-8") as fout:
-        for src, budget in budgets.items():
-            path = pre / "pretrain.train.jsonl"
-            if not path.exists():
-                continue
-            # このデータ種の総文字数を数えて、予算に収まる確率で文書を抜き出す
-            total = 0
+        if path.exists():
+            # 1周目: 種類ごとの総文字数（行の長さで近似）。2周目: 予算に収まる確率で文書を抜き出す
+            total = dict.fromkeys(budgets, 0)
             with path.open(encoding="utf-8") as f:
                 for line in f:
+                    k = _src_of(line)
+                    if k in total:
+                        total[k] += len(line)
+            prob = {}
+            for src, budget in budgets.items():
+                if total[src] == 0:
+                    print(f"  {src}: 文書がありません（スキップ）")
+                else:
+                    prob[src] = min(1.0, budget / total[src])
+            used = dict.fromkeys(prob, 0)
+            with path.open(encoding="utf-8") as f:
+                for line in f:
+                    k = _src_of(line)
+                    if k not in prob or (prob[k] < 1.0 and rng.random() >= prob[k]):
+                        continue
                     d = json.loads(line)
-                    if d["src"] == src:
-                        total += len(d["text"])
-            if total == 0:
-                print(f"  {src}: 文書がありません（スキップ）")
-                continue
-            p = min(1.0, budget / total)
-            used = 0
-            for d in _iter_docs(path, 1.0, rng):
-                if d["src"] != src or (p < 1.0 and rng.random() >= p):
-                    continue
-                for ch in chunk_text(encode_text(d["text"]), args.max_line_chars):
-                    fout.write(ch.replace("\n", " ") + "\n")
-                    used += len(ch)
-                    n_lines += 1
-            print(f"  {src}: 総{total:,}文字のうち約{used:,}文字を使用（改行・インデント記号の分を含む。抜き出し確率 {p:.3f}）")
+                    for ch in chunk_text(encode_text(d["text"]), args.max_line_chars):
+                        fout.write(ch.replace("\n", " ") + "\n")
+                        used[k] += len(ch)
+                        n_lines += 1
+            for src in prob:
+                print(f"  {src}: 総約{total[src]:,}文字のうち約{used[src]:,}文字を使用（改行・インデント記号の分を含む。抜き出し確率 {prob[src]:.3f}）")
         # 指示データ（短いので全部）と、追加のコーパス（テンプレートデータ等）
         extras = [Path(args.sft_dir) / "hf_corpus.txt"] + [Path(x) for x in (args.extra_corpus or [])]
         for ex in extras:
@@ -126,22 +140,25 @@ def pack(args) -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"vocab_size": vocab, "eos_id": eos, "code_aware": codec_on, "files": {}}
-    max_tokens = {"wiki": args.max_tokens_wiki, "code": args.max_tokens_code}
+    max_tokens = {"wiki": args.max_tokens_wiki, "web": args.max_tokens_web, "code": args.max_tokens_code}
 
     for split in ("val", "train"):
         path = Path(args.pretrain_dir) / f"pretrain.{split}.jsonl"
-        files = {src: open(out_dir / f"{split}_{src}.bin", "wb") for src in ("wiki", "code")}
-        counts = {"wiki": 0, "code": 0}
-        chars = {"wiki": 0, "code": 0}
+        files = {src: open(out_dir / f"{split}_{src}.bin", "wb") for src in SRCS}
+        counts = {s_: 0 for s_ in SRCS}
+        chars = {s_: 0 for s_ in SRCS}
         t0 = last_print = time.time()
-        batch: dict[str, list[str]] = {"wiki": [], "code": []}
+        batch: dict[str, list[str]] = {s_: [] for s_ in SRCS}
 
         def flush(src: str) -> None:
             texts = batch[src]
             if not texts:
                 return
             enc_texts = [encode_text(t) if codec_on else t for t in texts]
-            ids_list = sp.Encode(enc_texts)
+            try:  # 複数スレッドで符号化する（速い）。古いsentencepieceには num_threads が無いので、その場合は1スレッド
+                ids_list = sp.Encode(enc_texts, num_threads=os.cpu_count() or 1)
+            except TypeError:
+                ids_list = sp.Encode(enc_texts)
             arr = []
             for ids in ids_list:
                 arr.extend(ids)
@@ -169,7 +186,7 @@ def pack(args) -> None:
         for src in files:
             flush(src)
             files[src].close()
-        for src in ("wiki", "code"):
+        for src in SRCS:
             meta["files"][f"{split}_{src}"] = {
                 "tokens": counts[src], "chars": chars[src],
                 "chars_per_token": round(chars[src] / counts[src], 3) if counts[src] else None,
@@ -191,6 +208,7 @@ def main() -> None:
     c.add_argument("--extra_corpus", nargs="*", default=[], help="追加のコーパス（テンプレートデータの *_corpus.txt など）")
     c.add_argument("--out", default="data/p7_tok_corpus.txt")
     c.add_argument("--wiki_chars", type=int, default=60_000_000)
+    c.add_argument("--web_chars", type=int, default=60_000_000)
     c.add_argument("--code_chars", type=int, default=30_000_000)
     c.add_argument("--max_line_chars", type=int, default=1000)
     c.add_argument("--seed", type=int, default=42)
@@ -201,6 +219,7 @@ def main() -> None:
     p.add_argument("--out_dir", default="/kaggle/working/p7_tokens")
     p.add_argument("--batch_docs", type=int, default=256)
     p.add_argument("--max_tokens_wiki", type=int, default=0, help="trainに詰める上限（0なら全部）")
+    p.add_argument("--max_tokens_web", type=int, default=0)
     p.add_argument("--max_tokens_code", type=int, default=0)
 
     args = ap.parse_args()

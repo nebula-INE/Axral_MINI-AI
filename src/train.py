@@ -174,7 +174,7 @@ def train(config_path: str):
             amp_dtype = torch.bfloat16
         else:
             amp_dtype, use_scaler = torch.float16, True
-    scaler = torch.cuda.amp.GradScaler() if use_scaler else None
+    scaler = torch.amp.GradScaler("cuda") if use_scaler else None
     if amp_dtype:
         log(f"混合精度: {amp_dtype}")
 

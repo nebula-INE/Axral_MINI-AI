@@ -174,6 +174,8 @@ def generate_answer(
     use_calculator: bool = True,
     use_topic_guard: bool = True,
     use_web_search: bool = False,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
 ) -> str:
     """入力テキストに対して [BOS] + input_ids を渡して自己回帰生成する。
     学習時と同じ構造（[BOS] input_ids cot answer [EOS]）を踏襲する。
@@ -213,6 +215,8 @@ def generate_answer(
         eos_token_id=tok_meta["eos_id"],
         strategy=strategy,
         temperature=temperature,
+        repetition_penalty=repetition_penalty,
+        no_repeat_ngram_size=no_repeat_ngram_size,
     )
     new_tokens = generated[0, input_tensor.size(1):].tolist()
     if tok_meta["eos_id"] in new_tokens:

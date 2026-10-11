@@ -4,7 +4,7 @@ p7（2段階学習）用のデータを取得・整形する。
 
   事前学習用（普通の文章とコードを大量に読ませる）
     - 日本語Wikipedia
-    - 日本語Web（FineWeb-2 の jpn_Jpan。ストリーミングで必要な分だけ）
+    - 日本語Web（FineWeb-2 の教育的な質で選別した版。ストリーミングで必要な分だけ）
     - CodeSearchNet（Pythonの関数）
   指示学習用（既存の hf_import と同じ形式 = mix_data.py がそのまま読める）
     - llm-japanese-dataset-vanilla（日本語の指示データ）
@@ -41,7 +41,10 @@ from pathlib import Path
 
 # --------------------------------------------------------------------------- 既定のデータ源（実物は未確認。候補を順に試す）
 WIKI_CANDIDATES = [("wikimedia/wikipedia", "20231101.ja")]
-WEB_CANDIDATES = [("HuggingFaceFW/fineweb-2", "jpn_Jpan"), ("range3/cc100-ja", None)]
+# 先頭ほど優先。hotchpotch版は教育的な質で選別済み（score>=2.5）。small_tokens_cleaned は512トークン以下の文書からWebの定型文を除いたもので、窓512に合う。
+WEB_CANDIDATES = [("hotchpotch/fineweb-2-edu-japanese", "small_tokens_cleaned"),
+                  ("HuggingFaceFW/fineweb-2", "jpn_Jpan"), ("range3/cc100-ja", None)]
+WEB_SKIP_ROWS = 10000  # hotchpotch の small_tokens* は 0〜9,999行目と 10,000〜19,999行目が重複しているため、先頭を読み飛ばす
 CODE_CANDIDATES = [("Nan-Do/code-search-net-python", None), ("code-search-net/code_search_net", "python")]
 VANILLA_CANDIDATES = [("izumi-lab/llm-japanese-dataset-vanilla", None)]
 CODE_INSTR_CANDIDATES = [("iamtarun/python_code_instructions_18k_alpaca", None),
@@ -63,6 +66,7 @@ def clean_wiki(text: str, min_chars: int = 200) -> str | None:
     return out if len(out) >= min_chars else None
 
 
+_RUN_RE = re.compile(r"(.)\1{9,}")
 _JA_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 
 
@@ -77,6 +81,8 @@ def clean_web(text: str, min_chars: int = 200, max_chars: int = 30000, min_ja_ra
     if len(_JA_RE.findall(out)) < min_ja_ratio * len(out):
         return None
     if len(_URL_RE.findall(out)) > 5:
+        return None
+    if _RUN_RE.search(out) or out.count("もっと見る") > 2:  # 「wwwwwwwwww」「ああああああ」のような繰り返し、定型文の切れ端
         return None
     return out
 
@@ -302,6 +308,11 @@ def main() -> None:
                 ds, used = _open_stream(web_cands, args.web_local, "web")
                 if ds is not None:
                     print(f"日本語Web: {used}（上限 {args.web_max_chars:,}文字）")
+                    if "small_tokens" in str(used):
+                        try:
+                            ds = ds.skip(WEB_SKIP_ROWS)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"  （先頭の重複部分を読み飛ばせませんでした: {type(e).__name__}）")
                     try:  # 先頭のダンプに偏らないよう、ストリームの中でかき混ぜる
                         ds = ds.shuffle(seed=args.seed, buffer_size=10000)
                     except Exception as e:  # noqa: BLE001
@@ -321,7 +332,7 @@ def main() -> None:
                     _write_pretrain(out_dir, web_docs(), "web", writers, stats, args.web_max_docs, args.web_max_chars)
                     if not stats["web_train_docs"]:
                         print(f"  [注意] 日本語Webから1件も取れませんでした。列名: {first_cols}")
-                    records.append(dict(source_id="fineweb2_ja", url=f"hf:{used}", license="ODC-By 1.0（FineWeb-2。元のWebページの権利は別）",
+                    records.append(dict(source_id="fineweb2_ja", url=f"hf:{used}", license="ODC-By 1.0（FineWeb-2系。元のWebページの権利は別）",
                                         source_type="public", category="pretrain", notes="日本語Web本文。事前学習用"))
 
             code_cands = [(args.code_dataset, None)] if args.code_dataset else CODE_CANDIDATES

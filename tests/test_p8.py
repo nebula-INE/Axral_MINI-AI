@@ -25,6 +25,8 @@ def test_clean_web_filters():
     assert clean_web("English only text. " * 40) is None  # 日本語が少ない
     assert clean_web(ja + " http://a http://b http://c http://d http://e http://f") is None  # URLだらけ
     assert clean_web("あ" * 40000) is None  # 長すぎる
+    assert clean_web(ja + "wwwwwwwwwwwwwwww") is None  # 繰り返し（掲示板のコメント）
+    assert clean_web(ja + "もっと見る" * 3) is None  # 定型文の切れ端
 
 
 def test_build_corpus_single_pass_and_budget(tmp_path):

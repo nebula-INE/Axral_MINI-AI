@@ -120,21 +120,57 @@ def pick_amp(mode: str, device):
 
 
 # --------------------------------------------------------------------------- checkpoint
+def _free_bytes(path: str) -> int:
+    import shutil
+    d = path
+    while d and not os.path.isdir(d):
+        d = os.path.dirname(d)
+    return shutil.disk_usage(d or ".").free
+
+
 def save_ckpt(path: str, model, optimizer, scaler, step: int, tokens_seen: int, elapsed: float,
-              tok_fp: str | None, keep: int = 2) -> None:
+              tok_fp: str | None, keep: int = 2, need_bytes: int | None = None) -> bool:
+    """checkpointを保存する。ディスクが足りないときは古いcheckpointを先に消し、
+    それでも足りなければ保存を諦めて学習を続ける（Falseを返す）。"""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    for t in glob.glob(os.path.join(d, "*.tmp")):   # 前回の途中で止まった残骸
+        try:
+            os.remove(t)
+        except OSError:
+            pass
+    olds = sorted(glob.glob(os.path.join(d, "checkpoint_[0-9]*.pt")))
+    if need_bytes is None and olds:
+        need_bytes = os.path.getsize(olds[-1])
+    need = int((need_bytes or 0) * 1.1)
+    # 空きが足りないとき、古い順に消して場所を作る（最新1個は最後まで残す）
+    while need and _free_bytes(d) < need and len(olds) > 1:
+        os.remove(olds.pop(0))
+    if need and _free_bytes(d) < need:
+        print(f"[警告] ディスク空き不足のためcheckpoint保存を見送り: 空き {_free_bytes(d)/1e9:.2f}GB < 必要 {need/1e9:.2f}GB",
+              flush=True)
+        return False
     payload = {
         "step": step, "tokens_seen": tokens_seen, "elapsed_seconds": elapsed,
         "model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": None, "scaler_state_dict": scaler.state_dict() if scaler else None,
         "tokenizer_fingerprint": tok_fp, "timestamp": datetime.now().isoformat(),
     }
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    torch.save(payload, tmp)
-    os.replace(tmp, path)  # 保存の途中で止まっても、前のcheckpointが壊れないようにする
-    olds = sorted(glob.glob(os.path.join(os.path.dirname(path), "checkpoint_[0-9]*.pt")))
+    try:
+        torch.save(payload, tmp)
+        os.replace(tmp, path)  # 保存の途中で止まっても、前のcheckpointが壊れないようにする
+    except (OSError, RuntimeError) as e:
+        print(f"[警告] checkpoint保存に失敗（学習は続行）: {e}", flush=True)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    olds = sorted(glob.glob(os.path.join(d, "checkpoint_[0-9]*.pt")))
     for old in olds[:-keep]:
         os.remove(old)
+    return True
 
 
 # --------------------------------------------------------------------------- 評価

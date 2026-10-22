@@ -200,7 +200,7 @@ def main() -> None:
 
     # ------------------------------------------------------------------ restore（GPUセッションの最初に）
     elif a.stage == "restore":
-        hits = glob.glob("/kaggle/input/**/prep_bundle.tar", recursive=True)
+        hits = glob.glob("/kaggle/input/**/prep_small.tar", recursive=True)
         if hits and not os.path.exists(os.path.join(a.token_dir, "pack_meta.json")):
             run([py, "-m", "src.kaggle_sync", "bundle-restore"], "束ねたデータの展開", root)
         elif hits:
@@ -214,7 +214,6 @@ def main() -> None:
     # ------------------------------------------------------------------ bench
     elif a.stage == "bench":
         require(root, os.path.join(a.token_dir, "pack_meta.json"), "速度測定")
-        import json
         meta = json.load(open(os.path.join(a.token_dir, "pack_meta.json"), encoding="utf-8"))
         avail = sum(v["tokens"] for k, v in meta["files"].items() if k.startswith("train_"))
         print(f"用意できる学習データ: {avail:,}トークン（語彙 {meta['vocab_size']}）")
@@ -224,6 +223,16 @@ def main() -> None:
 
     # ------------------------------------------------------------------ pretrain
     elif a.stage == "pretrain":
+        import shutil as _sh
+        _free = _sh.disk_usage(a.project_root if os.path.isdir(a.project_root) else ".").free / 1e9
+        print(f"[容量] 空き {_free:.1f}GB")
+        if _free < 4.0:
+            big = [(os.path.join(r, f), os.path.getsize(os.path.join(r, f)))
+                   for r in (a.pretrain_dir, a.sft_dir) if os.path.isdir(r)
+                   for f in os.listdir(r) if os.path.isfile(os.path.join(r, f))]
+            hint = ", ".join(f"{pth}({sz/1e9:.1f}GB)" for pth, sz in sorted(big, key=lambda x: -x[1])[:3])
+            raise SystemExit(f"空きが4GB未満です（{_free:.1f}GB）。事前学習の途中でディスクが尽きる恐れがあるため中止します。"
+                             f"生テキストなど不要なファイルを消してください: {hint}")
         require(root, os.path.join(a.token_dir, "pack_meta.json"), "事前学習")
         require(root, tok_model, "事前学習")
         lr = a.lr or (6e-4 if a.d_model <= 640 else 4e-4)
@@ -252,9 +261,12 @@ def main() -> None:
         ck_dir = f"results/checkpoints/{a.exp_name}"
         # 選んだモデルの大きさを checkpoint と一緒に保存（バックアップにも入る）。新しいセッションで再開するとき、重みの形を合わせるため
         os.makedirs(os.path.join(root, ck_dir), exist_ok=True)
-        with open(os.path.join(root, ck_dir, "model_choice.json"), "w", encoding="utf-8") as f:
-            json.dump({"d_model": a.d_model, "n_layers": a.n_layers, "n_heads": a.n_heads, "micro_bs": a.micro_bs,
-                       "block": a.block, "vocab_size": a.vocab_size, "pretrain_hours": a.pretrain_hours}, f)
+        payload = json.dumps({"d_model": a.d_model, "n_layers": a.n_layers, "n_heads": a.n_heads, "micro_bs": a.micro_bs,
+                              "block": a.block, "vocab_size": a.vocab_size, "pretrain_hours": a.pretrain_hours})
+        choice_path = os.path.join(root, ck_dir, "model_choice.json")
+        with open(choice_path + ".tmp", "w", encoding="utf-8") as f:  # 一時ファイルに書いてから置き換える（途中で落ちても空ファイルを残さない）
+            f.write(payload)
+        os.replace(choice_path + ".tmp", choice_path)
 
         # 学習中のcheckpointを、別プロセスで定期的にKaggle Datasetへ上げる（セッションが切れても失わない）
         bak = None
@@ -307,7 +319,6 @@ def main() -> None:
             "前処理（新しいトークナイザーでtoken_ids化）", root)
         require(root, f"data/{MIX_VERSION}_processed.train.jsonl", "前処理")
 
-        import json
         meta = json.load(open(os.path.join(a.token_dir, "pack_meta.json"), encoding="utf-8"))
         cfg = {"experiment_name": a.sft_exp_name,
                "model": {**model_cfg(a), "dropout": 0.1, "attention_dropout": 0.1, "residual_dropout": 0.1},

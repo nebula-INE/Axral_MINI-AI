@@ -185,13 +185,13 @@ def restore(a) -> None:
 
 
 # --------------------------------------------------------------------------- CPU→GPU セッションの受け渡し
-BUNDLE_NAME = "prep_bundle.tar"
+BUNDLE_NAME = "prep_small.tar"  # 小さいファイル（指示データ・トークナイザー等）だけをまとめたtar。大きい .bin は tar に入れず、そのまま上げる
 
 
 def bundle_items(work: str, root: str) -> list[tuple[str, str]]:
-    """(tarの中の名前, 実パス)。/kaggle/working からの相対パスで入れる（復元は /kaggle/working に展開するだけ）。"""
+    """小さいもの: (tarの中の名前, 実パス)。/kaggle/working からの相対パスで入れる。"""
     items = []
-    paths = [os.path.join(work, "p7_tokens"), os.path.join(work, "hf_import_p7"), os.path.join(work, "hf_import")]
+    paths = [os.path.join(work, "hf_import_p7"), os.path.join(work, "hf_import")]
     for pat in ("spm_p7.model", "spm_p7.vocab", "v_tpl_p7*", "v_refusal_p7*", "sources.csv"):
         paths += glob.glob(os.path.join(root, "data", pat))
     for p in paths:
@@ -201,33 +201,54 @@ def bundle_items(work: str, root: str) -> list[tuple[str, str]]:
 
 
 def bundle_make(a) -> None:
+    """トークン列(.bin)と pack_meta.json は平らなファイルのまま上げる（tarに複製するとディスクが足りなくなる。
+    アップロード用の置き場はハードリンクなので、追加のディスクを使わない）。"""
     items = bundle_items(a.work, a.root)
     os.makedirs(a.stage_root, exist_ok=True)
-    out = os.path.join(a.stage_root, BUNDLE_NAME)
-    print("束ねるもの:")
-    with tarfile.open(out, "w") as tf:  # 圧縮しない（.bin は縮まない。速い）
+    small = os.path.join(a.stage_root, BUNDLE_NAME)
+    print("束ねるもの（小さいもの → " + BUNDLE_NAME + "）:")
+    with tarfile.open(small, "w") as tf:
         for arc, p in items:
             size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(p) for f in fs) if os.path.isdir(p) else os.path.getsize(p)
             print(f"  {size / 1e6:>9,.1f} MB  {arc}")
             tf.add(p, arcname=arc)
-    print(f"✓ {out}（{os.path.getsize(out) / 1e9:.2f}GB）")
-    if not push({BUNDLE_NAME: out}, a.slug, a.user, a.slug, f"prep bundle {time.strftime('%m-%d %H:%M')}",
+    files = {BUNDLE_NAME: small}
+    tok_dir = os.path.join(a.work, "p7_tokens")
+    for p in sorted(glob.glob(os.path.join(tok_dir, "*.bin")) + glob.glob(os.path.join(tok_dir, "pack_meta.json"))):
+        files[os.path.basename(p)] = p
+        print(f"  {os.path.getsize(p) / 1e6:>9,.1f} MB  {os.path.basename(p)}（そのまま）")
+    if not push(files, a.slug, a.user, a.slug, f"prep bundle {time.strftime('%m-%d %H:%M')}",
                 os.path.join(a.stage_root, "_bundle_stage")):
-        print("⚠ アップロードに失敗しました。tar は残してあります。上のエラーを確認して、もう一度 bundle-make を実行してください")
+        print("⚠ アップロードに失敗しました。上のエラーを確認して、もう一度 bundle-make を実行してください（データは消えていません）")
         sys.exit(1)
+    os.remove(small)
 
 
 def bundle_restore(a) -> None:
     hits = sorted(glob.glob(os.path.join(a.input_root, "**", BUNDLE_NAME), recursive=True), key=os.path.getmtime)
     if not hits:
         sys.exit(f"❌ {BUNDLE_NAME} が {a.input_root} に見つかりません。Add Input でデータ受け渡し用の Dataset を追加してください")
+    src_dir = os.path.dirname(hits[-1])
     print(f"展開: {hits[-1]} → {a.work}")
     with tarfile.open(hits[-1]) as tf:
         try:
             tf.extractall(a.work, filter="data")  # Python 3.12+: 安全な展開
         except TypeError:
             tf.extractall(a.work)
-    print("✓ 完了")
+    # 大きい .bin は、コピーせずリンクを張る（/kaggle/working のディスクを節約。読み取りだけなので問題ない）
+    tok_dir = os.path.join(a.work, "p7_tokens")
+    os.makedirs(tok_dir, exist_ok=True)
+    n = 0
+    for p in glob.glob(os.path.join(src_dir, "*.bin")) + glob.glob(os.path.join(src_dir, "pack_meta.json")):
+        dst = os.path.join(tok_dir, os.path.basename(p))
+        if os.path.lexists(dst):
+            os.remove(dst)
+        try:
+            os.symlink(p, dst)
+        except OSError:
+            shutil.copy2(p, dst)
+        n += 1
+    print(f"✓ 完了（トークン列 {n}ファイル）")
 
 
 # --------------------------------------------------------------------------- CLI

@@ -89,16 +89,23 @@ def push(files: dict[str, str], slug: str, user: str, title: str, message: str, 
     meta = {"title": title, "id": f"{user}/{slug}", "licenses": [{"name": "CC0-1.0"}]}
     (st / "dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     t0 = time.time()
-    code, out = _kaggle(["datasets", "version", "-p", str(st), "-m", message, "-d"])
+    code, out = _kaggle(["datasets", "version", "-p", str(st), "-m", message, "-d", "-q"])
     if code != 0 and any(k in out.lower() for k in ("404", "not found", "does not exist", "could not find")):
         print("  Dataset がまだ無いので新規作成します")
-        code, out = _kaggle(["datasets", "create", "-p", str(st)])
+        code, out = _kaggle(["datasets", "create", "-p", str(st), "-q"])
+        if code != 0:   # 作成が非同期のため、非0で返っても実際は作られていることがある。状態で確かめる
+            time.sleep(10)
+            c2, o2 = _kaggle(["datasets", "status", f"{user}/{slug}"])
+            if c2 == 0 and "error" not in o2.lower() and "not found" not in o2.lower() and "404" not in o2:
+                print(f"  （createは非0でしたが、Datasetの状態は「{o2.strip()[:40]}」でした。作成済みとみなします）")
+                code = 0
     shutil.rmtree(st, ignore_errors=True)
     if code == 0:
         size = sum(os.path.getsize(p) for p in files.values()) / 1e6
         print(f"  ✓ バックアップ完了: {slug}（{size:,.0f}MB / {time.time() - t0:.0f}秒）")
         return True
-    print(f"  ⚠ バックアップに失敗しました（次の回に再試行します）: {out[-300:]}")
+    tail = " | ".join(l for l in out.splitlines() if l.strip() and "it/s]" not in l and "B/s]" not in l)[-400:]
+    print(f"  ⚠ バックアップに失敗しました（次の回に再試行します）: {tail or out[-300:]}")
     return False
 
 

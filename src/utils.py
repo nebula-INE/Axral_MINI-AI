@@ -44,25 +44,42 @@ def save_checkpoint(
     ckpt_dir: str,
     is_best: bool = False,
     tokenizer_fingerprint: str | None = None,
+    keep: int = 2,
 ) -> str:
+    """is_best=True: 重みだけの checkpoint_best.pt を上書き保存する（optimizerを含めないので約1/3の大きさで速い）。
+    is_best=False: 再開用の checkpoint_{step}.pt（optimizer込み）を保存し、古いものは keep 個だけ残す。"""
     os.makedirs(ckpt_dir, exist_ok=True)
-    payload = {
-        "step": step,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-        "timestamp": datetime.now().isoformat(),
-        "tokenizer_fingerprint": tokenizer_fingerprint,
-    }
-
-    path = os.path.join(ckpt_dir, f"checkpoint_{step:06d}.pt")
-    torch.save(payload, path)
+    meta = {"step": step, "timestamp": datetime.now().isoformat(), "tokenizer_fingerprint": tokenizer_fingerprint}
 
     if is_best:
         best_path = os.path.join(ckpt_dir, "checkpoint_best.pt")
-        torch.save(payload, best_path)
+        tmp = best_path + ".tmp"
+        torch.save({**meta, "model_state_dict": model.state_dict()}, tmp)
+        os.replace(tmp, best_path)  # 保存の途中で止まっても、前のbestが壊れない
+        return best_path
 
+    path = os.path.join(ckpt_dir, f"checkpoint_{step:06d}.pt")
+    tmp = path + ".tmp"
+    torch.save({**meta, "model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None}, tmp)
+    os.replace(tmp, path)
+    for old in sorted(glob.glob(os.path.join(ckpt_dir, "checkpoint_[0-9]*.pt")))[:-keep]:
+        os.remove(old)
     return path
+
+
+def limit_loader(loader, max_samples: int):
+    """検証データを max_samples 件に絞った DataLoader を返す（等間隔に選ぶので毎回同じ・偏らない）。
+    0以下、または元が小さいときはそのまま返す。生成を伴う評価（EM/F1）が重いため。"""
+    ds = getattr(loader, "dataset", None)
+    if not max_samples or max_samples <= 0 or ds is None or len(ds) <= max_samples or loader.batch_size is None:
+        return loader
+    from torch.utils.data import DataLoader, Subset
+
+    n = len(ds)
+    idx = [int(i * n / max_samples) for i in range(max_samples)]
+    return DataLoader(Subset(ds, idx), batch_size=loader.batch_size, shuffle=False,
+                      collate_fn=loader.collate_fn, num_workers=0)
 
 
 def find_latest_checkpoint(ckpt_dir: str) -> str | None:

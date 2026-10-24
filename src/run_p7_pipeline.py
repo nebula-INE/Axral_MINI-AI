@@ -153,6 +153,8 @@ def main() -> None:
     ap.add_argument("--sft_epochs", type=int, default=3)
     ap.add_argument("--pretrained", default=None, help="事前学習の重み（既定: results/checkpoints/{exp_name}/pretrained_final.pt）")
     ap.add_argument("--skip_eval", action="store_true")
+    ap.add_argument("--eval_samples", type=int, default=400, help="SFT中の検証で使う件数（0なら全件。全件だと生成評価に数十分かかる）")
+    ap.add_argument("--eval_frequency", type=int, default=1000, help="SFT中、何ステップごとに検証するか")
     a = ap.parse_args()
 
     root = a.project_root
@@ -329,7 +331,7 @@ def main() -> None:
                         "tokenizer_path": tok_model, "vocab_size": meta["vocab_size"],
                         "batch_size": 16, "eval_batch_size": 16},
                "training": {"epochs": a.sft_epochs, "grad_accum_steps": 4, "max_grad_norm": 1.0,
-                            "label_smoothing": 0.1, "eval_frequency": 500, "checkpoint_frequency": 1000,
+                            "label_smoothing": 0.1, "eval_frequency": a.eval_frequency, "eval_max_samples": a.eval_samples, "checkpoint_frequency": 1000,
                             "early_stopping_patience": 5, "resume_from_checkpoint": True, "amp": "auto",
                             "init_from": pretrained},
                "kaggle": {"max_session_time_minutes": a.session_minutes},

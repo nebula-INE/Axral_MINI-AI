@@ -21,7 +21,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from src.model import TransformerLM
 from src.data import build_dataloaders
 from src.eval import evaluate
-from src.utils import load_config, save_checkpoint, find_latest_checkpoint, load_checkpoint, compute_tokenizer_fingerprint, native_bf16_supported
+from src.utils import limit_loader, load_config, save_checkpoint, find_latest_checkpoint, load_checkpoint, compute_tokenizer_fingerprint, native_bf16_supported
 
 
 def get_linear_schedule_with_warmup(optimizer, num_warmup_steps: int, num_training_steps: int):
@@ -100,6 +100,10 @@ def train(config_path: str):
     print(f"[{exp_name}] パラメータ数: {model.num_parameters():,}")
 
     train_loader, val_loader = build_dataloaders(config, tok_meta)
+    _n_val = len(getattr(val_loader, "dataset", []) or [])
+    val_loader = limit_loader(val_loader, config.get("training", {}).get("eval_max_samples", 0))
+    if _n_val and len(val_loader.dataset) != _n_val:
+        print(f"評価用データを {_n_val}件 → {len(val_loader.dataset)}件に絞ります（生成を伴う評価が重いため）")
 
     opt_cfg = config["optimizer"]
     optimizer = torch.optim.AdamW(
